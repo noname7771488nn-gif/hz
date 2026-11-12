@@ -1,9 +1,10 @@
 local Blocks = require(script.Parent.Blocks)
+local InventoryLogic = require(script.Parent.InventoryLogic)
 
 export type ItemDef = {
 	key: string,
 	name: string,
-	kind: string, -- "block" | "sword" | "armor" | "material"
+	kind: string, -- "block" | "sword" | "armor" | "food" | "material"
 	maxStack: number,
 	color: Color3,
 	block: string?,
@@ -12,9 +13,13 @@ export type ItemDef = {
 	slot: string?, -- armor slot
 	armor: number?,
 	toughness: number?,
+	food: number?, -- hunger points restored
+	saturation: number?,
+	alwaysEdible: boolean?, -- can be eaten on a full hunger bar
+	goldenApple: boolean?, -- grants Regeneration II and Absorption
 }
 
-export type Stack = { id: string, count: number, ench: { [string]: number }? }
+export type Stack = InventoryLogic.Stack
 
 local Items = {}
 
@@ -27,7 +32,7 @@ for _, block in Blocks.list do
 	defs[block.key] = { key = block.key, name = block.name, kind = "block", maxStack = 64, color = block.color, block = block.key }
 end
 
--- Damage, attack speed, armor and toughness values are Minecraft Java 1.21.1's.
+-- Damage, attack speed, armor, toughness and food values are Minecraft Java's (1.9 and later).
 local extra: { ItemDef } = {
 	{ key = "coal", name = "Coal", kind = "material", maxStack = 64, color = Color3.fromRGB(30, 30, 30) },
 	{ key = "raw_iron", name = "Raw Iron", kind = "material", maxStack = 64, color = Color3.fromRGB(196, 160, 128) },
@@ -42,14 +47,28 @@ local extra: { ItemDef } = {
 	{ key = "iron_chestplate", name = "Iron Chestplate", kind = "armor", maxStack = 1, color = IRON, slot = "chest", armor = 6, toughness = 0 },
 	{ key = "iron_leggings", name = "Iron Leggings", kind = "armor", maxStack = 1, color = IRON, slot = "legs", armor = 5, toughness = 0 },
 	{ key = "iron_boots", name = "Iron Boots", kind = "armor", maxStack = 1, color = IRON, slot = "feet", armor = 2, toughness = 0 },
+	{ key = "cooked_beef", name = "Steak", kind = "food", maxStack = 64, color = Color3.fromRGB(133, 73, 45), food = 8, saturation = 12.8 },
+	{
+		key = "golden_apple",
+		name = "Golden Apple",
+		kind = "food",
+		maxStack = 64,
+		color = Color3.fromRGB(234, 200, 60),
+		food = 4,
+		saturation = 9.6,
+		alwaysEdible = true,
+		goldenApple = true,
+	},
 }
 for _, def in extra do
 	defs[def.key] = def
 end
 
 Items.defs = defs
+-- The shared inventory rules look items up here.
+InventoryLogic.defs = defs
+
 Items.ARMOR_SLOTS = { "head", "chest", "legs", "feet" }
-Items.SLOT_COUNT = 36 -- 1-9 hotbar, 10-36 main inventory
 Items.FIST = { damage = 1, attackSpeed = 4 }
 
 local ENCHANT_NAMES = { protection = "Protection", sharpness = "Sharpness", fire_aspect = "Fire Aspect", unbreaking = "Unbreaking" }
@@ -63,17 +82,17 @@ function Items.get(key: string?): ItemDef?
 	return defs[key]
 end
 
-function Items.isArmorSlot(ref: any): boolean
-	return ref == "head" or ref == "chest" or ref == "legs" or ref == "feet"
-end
-
--- Stacks merge only when they are the same item with no enchantments.
-function Items.canMerge(a: Stack, b: Stack): boolean
-	return a.id == b.id and a.ench == nil and b.ench == nil
+-- Attacks per second of a held stack (bare hands and non-weapons recharge almost instantly).
+function Items.attackSpeed(stack: Stack?): number
+	local def = stack and defs[stack.id]
+	if def and def.kind == "sword" then
+		return def.attackSpeed or Items.FIST.attackSpeed
+	end
+	return Items.FIST.attackSpeed
 end
 
 function Items.copy(stack: Stack): Stack
-	return { id = stack.id, count = stack.count, ench = if stack.ench then table.clone(stack.ench) else nil }
+	return InventoryLogic.copy(stack)
 end
 
 -- Returns the display name and one line per enchantment.

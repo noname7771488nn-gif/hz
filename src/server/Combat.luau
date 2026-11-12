@@ -1,6 +1,6 @@
--- Melee combat following Minecraft Java 1.21.1: attack cooldown, critical and sprint hits,
--- armor/toughness/Protection reduction, Sharpness, Fire Aspect, hit invulnerability, knockback.
--- Works on "entities" so players and the PvP bot share the same rules.
+-- Melee combat using the system Minecraft introduced in 1.9: attack cooldown, critical hits,
+-- sprint knockback, sweep attacks, armor/toughness/Protection, Sharpness, Fire Aspect, absorption
+-- and hit invulnerability. Works on "entities" so players and the PvP bot share the same rules.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
@@ -10,6 +10,7 @@ local Items = require(Shared.Items)
 local Zones = require(Shared.Zones)
 local Remotes = require(Shared.Remotes)
 local Sounds = require(Shared.Sounds)
+local Xp = require(Shared.Xp)
 
 local Inventory = require(script.Parent.Inventory)
 local Drops = require(script.Parent.Drops)
@@ -23,6 +24,10 @@ local TAG_ATTRIBUTE = "CombatUntil" -- server time when the combat tag ends; rea
 local INVULNERABLE_SECONDS = 0.5 -- 10 hurt ticks
 local REACH_TOLERANCE = 5 -- studs, root-to-root, to absorb latency and hitbox size
 local FIRE_SECONDS_PER_LEVEL = 4
+local SWEEP_DAMAGE = 1
+local SWEEP_RADIUS = 1.7 * B -- how close to the main target a bystander must be
+local SWEEP_REACH = 3 * B + 2
+local BOT_REGEN_INTERVAL = 4
 
 export type Entity = {
 	name: string,
@@ -37,7 +42,7 @@ export type Entity = {
 	humanoid: Humanoid?,
 	root: BasePart?,
 	dead: boolean,
-	lastAttack: number,
+	lastAttack: number, -- when the attack cooldown last reset
 	hurtAt: number,
 	lastRegen: number,
 	lastAttacker: Entity?,
@@ -51,6 +56,8 @@ export type Entity = {
 	burningUntil: number,
 	nextBurnAt: number,
 	burnSource: Entity?,
+	absorption: number, -- extra golden hearts, used up before health
+	exhaustion: number, -- hunger cost of fighting; consumed by Survival
 	respawnAtArena: boolean,
 }
 
@@ -93,6 +100,8 @@ function Combat.newEntity(props: {
 		burningUntil = 0,
 		nextBurnAt = 0,
 		burnSource = nil,
+		absorption = 0,
+		exhaustion = 0,
 		respawnAtArena = false,
 	}
 	table.insert(entities, entity)
@@ -160,6 +169,32 @@ function Combat.resetFall(player: Player)
 	end
 end
 
+-- Any arm swing or change of held item restarts the attack cooldown.
+function Combat.resetCooldown(player: Player)
+	local entity = byPlayer[player]
+	if entity then
+		entity.lastAttack = os.clock()
+	end
+end
+
+function Combat.setAbsorption(entity: Entity, amount: number)
+	entity.absorption = math.max(0, amount)
+	if entity.player then
+		entity.player:SetAttribute("Absorption", entity.absorption)
+	end
+end
+
+function Combat.heal(entity: Entity, amount: number)
+	local humanoid = Combat.alive(entity)
+	if humanoid then
+		humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + amount)
+	end
+end
+
+function Combat.addXp(player: Player, amount: number)
+	player:SetAttribute("Xp", math.max(0, (player:GetAttribute("Xp") or 0) + amount))
+end
+
 local function extinguish(entity: Entity)
 	entity.burningUntil = 0
 	local fire = entity.root and entity.root:FindFirstChild("Burning")
@@ -203,7 +238,7 @@ local function flashRed(character: Model)
 	end)
 end
 
--- cause: "attack" | "fall" | "fire" | "void"
+-- cause: "attack" | "fall" | "fire" | "starve" | "void"
 function Combat.damage(victim: Entity, amount: number, cause: string, attacker: Entity?)
 	local humanoid, root = Combat.alive(victim)
 	if not humanoid or not root then
@@ -214,13 +249,20 @@ function Combat.damage(victim: Entity, amount: number, cause: string, attacker: 
 		amount = reduceByArmor(amount, armor, toughness)
 		victim.hurtAt = os.clock()
 	end
-	if cause ~= "void" then
+	if cause ~= "void" and cause ~= "starve" then
 		-- Each Protection level is 4%, capped at 80%.
 		amount *= 1 - math.min(protection, 20) / 25
 	end
 
+	if victim.absorption > 0 then
+		local absorbed = math.min(victim.absorption, amount)
+		amount -= absorbed
+		Combat.setAbsorption(victim, victim.absorption - absorbed)
+	end
+
 	victim.lastRegen = os.clock()
 	victim.lastCause = cause
+	victim.exhaustion += 0.1
 	if attacker then
 		victim.lastAttacker = attacker
 		victim.lastAttackerAt = os.clock()
@@ -232,7 +274,40 @@ function Combat.damage(victim: Entity, amount: number, cause: string, attacker: 
 	Sounds.play("hurt", root, 0.5)
 end
 
--- One melee swing from `attacker` at `victim`. `sprintHint` overrides sprint detection (used by the
+local function push(victim: Entity, from: Vector3, strength: number)
+	local root = victim.root
+	if not root then
+		return
+	end
+	local away = (root.Position - from) * Vector3.new(1, 0, 1)
+	if away.Magnitude > 0.01 then
+		local horizontal = away.Unit * strength
+		victim.knockback(Vector3.new(horizontal.X, Config.KNOCKBACK_VERTICAL, horizontal.Z))
+	end
+end
+
+-- A sweep hits everyone standing next to the main target for a little damage.
+local function sweepAround(attacker: Entity, victim: Entity, attackerRoot: BasePart, victimRoot: BasePart)
+	local now = os.clock()
+	for _, other in entities do
+		if other == attacker or other == victim then
+			continue
+		end
+		local _, otherRoot = Combat.alive(other)
+		if not otherRoot or now - other.hurtAt < INVULNERABLE_SECONDS or not Zones.pvpAllowedAt(otherRoot.Position) then
+			continue
+		end
+		local offset = otherRoot.Position - victimRoot.Position
+		local near = (offset * Vector3.new(1, 0, 1)).Magnitude <= SWEEP_RADIUS and math.abs(offset.Y) <= B
+		if near and (otherRoot.Position - attackerRoot.Position).Magnitude <= SWEEP_REACH then
+			tag(other)
+			Combat.damage(other, SWEEP_DAMAGE, "attack", attacker)
+			push(other, attackerRoot.Position, Config.KNOCKBACK_HORIZONTAL)
+		end
+	end
+end
+
+-- One melee hit from `attacker` on `victim`. `sprintHint` overrides sprint detection (used by the
 -- bot, which knows whether it is sprinting). Returns true if the hit landed.
 function Combat.attack(attacker: Entity, victim: Entity, sprintHint: boolean?): boolean
 	local _, attackerRoot = Combat.alive(attacker)
@@ -250,34 +325,39 @@ function Combat.attack(attacker: Entity, victim: Entity, sprintHint: boolean?): 
 	local now = os.clock()
 	local stack = attacker.weapon()
 	local def = stack and Items.get(stack.id)
-	local base, speed = Items.FIST.damage, Items.FIST.attackSpeed
-	if def and def.kind == "sword" then
-		base, speed = def.damage or base, def.attackSpeed or speed
-	end
+	local isSword = def ~= nil and def.kind == "sword"
+	local base = if def and isSword then def.damage or Items.FIST.damage else Items.FIST.damage
 	-- Attack cooldown: swinging before the weapon recharges does a fraction of the damage.
-	local charge = math.clamp((now - attacker.lastAttack) * speed, 0, 1)
+	local charge = math.clamp((now - attacker.lastAttack) * Items.attackSpeed(stack), 0, 1)
 	attacker.lastAttack = now
+	attacker.exhaustion += 0.1
 
 	if now - victim.hurtAt < INVULNERABLE_SECONDS then
 		return false
 	end
 
 	local velocity = attackerRoot.AssemblyLinearVelocity
+	local speed = (velocity * Vector3.new(1, 0, 1)).Magnitude
 	local strong = charge > 0.9
 	local sprinting = sprintHint
 	if sprinting == nil then
-		sprinting = (velocity * Vector3.new(1, 0, 1)).Magnitude > (Config.WALK_SPEED + Config.SPRINT_SPEED) / 2
+		sprinting = speed > (Config.WALK_SPEED + Config.SPRINT_SPEED) / 2
 	end
-	-- Critical hit: fully charged, falling, and not sprinting.
+	local onGround = math.abs(velocity.Y) < 1
+	-- Critical: fully charged, falling, not sprinting. Knockback hit: fully charged while
+	-- sprinting. Sweep: fully charged sword hit while standing or walking on the ground.
 	local critical = strong and velocity.Y < -1 and not sprinting
+	local knockbackHit = strong and sprinting
+	local sweep = strong and isSword and not critical and not knockbackHit and onGround and speed <= Config.WALK_SPEED + 1
 
 	local damage = base * (0.2 + charge * charge * 0.8)
 	if critical then
 		damage *= 1.5
 	end
 	local ench = stack and stack.ench
-	if ench and ench.sharpness then
-		damage += (0.5 * ench.sharpness + 0.5) * charge
+	local sharpness = if ench then ench.sharpness or 0 else 0
+	if sharpness > 0 then
+		damage += (0.5 * sharpness + 0.5) * charge
 	end
 
 	tag(attacker)
@@ -286,17 +366,13 @@ function Combat.attack(attacker: Entity, victim: Entity, sprintHint: boolean?): 
 	if ench and ench.fire_aspect then
 		ignite(victim, FIRE_SECONDS_PER_LEVEL * ench.fire_aspect, attacker)
 	end
-	Sounds.play("hit", victimRoot, if critical then 0.9 else 0.5)
-
-	local away = (victimRoot.Position - attackerRoot.Position) * Vector3.new(1, 0, 1)
-	if away.Magnitude > 0.01 then
-		local strength = Config.KNOCKBACK_HORIZONTAL
-		if strong and sprinting then
-			strength += Config.KNOCKBACK_SPRINT_BONUS
-		end
-		local push = away.Unit * strength
-		victim.knockback(Vector3.new(push.X, Config.KNOCKBACK_VERTICAL, push.Z))
+	push(victim, attackerRoot.Position, Config.KNOCKBACK_HORIZONTAL + (if knockbackHit then Config.KNOCKBACK_SPRINT_BONUS else 0))
+	if sweep then
+		sweepAround(attacker, victim, attackerRoot, victimRoot)
 	end
+
+	local kind = if critical then "crit" elseif knockbackHit then "knockback" elseif sweep then "sweep" elseif strong then "strong" else "weak"
+	Remotes.HitFx:FireAllClients(victim.model, kind, sharpness > 0, attacker.model)
 	return true
 end
 
@@ -305,16 +381,19 @@ local function onAttack(player: Player, target: any)
 		return
 	end
 	local attacker = byPlayer[player]
-	local victim = if typeof(target) == "Instance" and target:IsA("Model") then byModel[target] else nil
-	if not attacker or not victim then
+	if not attacker or not attacker.model then
 		return
 	end
+	Remotes.SwingFx:FireAllClients(attacker.model)
+	local victim = if typeof(target) == "Instance" and target:IsA("Model") then byModel[target] else nil
 	local _, attackerRoot = Combat.alive(attacker)
 	local _, victimRoot = Combat.alive(victim)
-	if not attackerRoot or not victimRoot then
+	if not victim or not attackerRoot or not victimRoot then
+		attacker.lastAttack = os.clock()
 		return
 	end
 	if (attackerRoot.Position - victimRoot.Position).Magnitude > Config.ATTACK_REACH * B + REACH_TOLERANCE then
+		attacker.lastAttack = os.clock()
 		return
 	end
 	Combat.attack(attacker, victim)
@@ -340,6 +419,8 @@ local function deathMessage(entity: Entity, killer: Entity?): string
 		return if killer then `{name} was doomed to fall by {killer.name}` else `{name} fell from a high place`
 	elseif cause == "fire" then
 		return if killer then `{name} was burned to a crisp while fighting {killer.name}` else `{name} burned to death`
+	elseif cause == "starve" then
+		return if killer then `{name} starved to death while fighting {killer.name}` else `{name} starved to death`
 	elseif cause == "void" then
 		return if killer then `{name} was knocked into the void by {killer.name}` else `{name} fell out of the world`
 	end
@@ -352,6 +433,7 @@ local function onDied(entity: Entity, model: Model)
 	end
 	entity.dead = true
 	extinguish(entity)
+	Combat.setAbsorption(entity, 0)
 	local killer = recentKiller(entity)
 	local position = entity.lastPosition or (entity.root and entity.root.Position) or Vector3.zero
 
@@ -359,19 +441,23 @@ local function onDied(entity: Entity, model: Model)
 	if player then
 		entity.respawnAtArena = Zones.zoneAt(position) == "arena" or Zones.zoneAt(position) == "pvpspawn"
 		Drops.scatter(Inventory.clearAll(player), position)
+		local level = Xp.level(player:GetAttribute("Xp") or 0)
 		player:SetAttribute(TAG_ATTRIBUTE, 0)
 		player:SetAttribute("Deaths", (player:GetAttribute("Deaths") or 0) + 1)
 		player:SetAttribute("Streak", 0)
 
 		local message = deathMessage(entity, killer)
 		Messages.broadcast(message, "death")
-		Remotes.Died:FireClient(player, message)
+		Remotes.Died:FireClient(player, message, player:GetAttribute("Xp") or 0)
+		-- Experience is lost on death; part of it goes to the killer.
+		player:SetAttribute("Xp", 0)
 
 		local killerPlayer = killer and killer.player
 		if killerPlayer then
 			local streak = (killerPlayer:GetAttribute("Streak") or 0) + 1
 			killerPlayer:SetAttribute("Kills", (killerPlayer:GetAttribute("Kills") or 0) + 1)
 			killerPlayer:SetAttribute("Streak", streak)
+			Combat.addXp(killerPlayer, math.clamp(level * 7, 10, 100))
 			if streak % 5 == 0 then
 				Messages.broadcast(`{killerPlayer.Name} is on a {streak} kill streak!`, "streak")
 			end
@@ -406,7 +492,9 @@ function Combat.bind(entity: Entity, model: Model)
 	entity.lastCause = "generic"
 	entity.lastPosition = nil
 	entity.burningUntil = 0
+	entity.exhaustion = 0
 	entity.lastRegen = os.clock()
+	Combat.setAbsorption(entity, 0)
 
 	humanoid.MaxHealth = Config.MAX_HEALTH
 	humanoid.Health = Config.MAX_HEALTH
@@ -431,9 +519,9 @@ function Combat.addPlayer(player: Player): Entity
 		weapon = function()
 			return (Inventory.selected(player))
 		end,
-		knockback = function(push: Vector3)
+		knockback = function(velocity: Vector3)
 			-- Players own their character's physics, so the push is applied on their client.
-			Remotes.Knockback:FireClient(player, push)
+			Remotes.Knockback:FireClient(player, velocity)
 		end,
 	})
 	byPlayer[player] = entity
@@ -514,7 +602,8 @@ local function step()
 			end
 		end
 
-		if humanoid.Health > 0 and humanoid.Health < humanoid.MaxHealth and now - entity.lastRegen >= Config.REGEN_INTERVAL then
+		-- Players regenerate through the hunger system (Survival); the bot just heals slowly.
+		if entity.isBot and humanoid.Health > 0 and humanoid.Health < humanoid.MaxHealth and now - entity.lastRegen >= BOT_REGEN_INTERVAL then
 			entity.lastRegen = now
 			humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + 1)
 		end
@@ -526,6 +615,7 @@ function Combat.init()
 	Remotes.Respawn.OnServerEvent:Connect(respawn)
 	Remotes.Swing.OnServerEvent:Connect(function(player)
 		if RateLimit.allow(player, "swing", 12) and player.Character then
+			Combat.resetCooldown(player)
 			Remotes.SwingFx:FireAllClients(player.Character)
 		end
 	end)
