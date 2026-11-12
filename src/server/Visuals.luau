@@ -68,15 +68,19 @@ local function shell(character: Model, bodyPart: BasePart, fraction: number, anc
 	part.Parent = character
 end
 
-local function attachHeldItem(character: Model, key: string)
-	local hand = (character:FindFirstChild("RightHand") or character:FindFirstChild("Right Arm")) :: any
+local function attachHeldItem(character: Model, key: string, left: boolean)
+	local hand = (
+		if left
+			then character:FindFirstChild("LeftHand") or character:FindFirstChild("Left Arm")
+			else character:FindFirstChild("RightHand") or character:FindFirstChild("Right Arm")
+	) :: any
 	local def = Items.get(key)
 	if not hand or not def then
 		return
 	end
 	local model = ItemModels.build(key, if def.kind == "block" then 0.8 else 1)
 	model.Name = TAG
-	local grip = if hand.Name == "Right Arm" then hand.CFrame * CFrame.new(0, -0.95, -0.15) else hand.CFrame * CFrame.new(0, -0.15, -0.2)
+	local grip = if string.find(hand.Name, "Arm") then hand.CFrame * CFrame.new(0, -0.95, -0.15) else hand.CFrame * CFrame.new(0, -0.15, -0.2)
 	if def.kind == "block" then
 		model:PivotTo(grip * CFrame.new(0, -0.2, -0.3))
 	else
@@ -90,8 +94,8 @@ local function attachHeldItem(character: Model, key: string)
 	model.Parent = character
 end
 
--- Rebuilds a character's armor shells and held item. Works for players and NPCs.
-function Visuals.apply(character: Model, armor: { [string]: string }, heldKey: string?)
+-- Rebuilds a character's armor shells and held items. Works for players and NPCs.
+function Visuals.apply(character: Model, armor: { [string]: string }, heldKey: string?, offhandKey: string?)
 	for _, child in character:GetChildren() do
 		if child.Name == TAG then
 			child:Destroy()
@@ -109,7 +113,10 @@ function Visuals.apply(character: Model, armor: { [string]: string }, heldKey: s
 		end
 	end
 	if heldKey then
-		attachHeldItem(character, heldKey)
+		attachHeldItem(character, heldKey, false)
+	end
+	if offhandKey then
+		attachHeldItem(character, offhandKey, true)
 	end
 end
 
@@ -119,13 +126,15 @@ function Visuals.refresh(player: Player, force: boolean?)
 		return
 	end
 	local selected = Inventory.selected(player)
+	local offhand = Inventory.offhand(player)
 	local armor = Inventory.armorIds(player)
-	local signature = `{selected and selected.id or ""}|{armor.head or ""}|{armor.chest or ""}|{armor.legs or ""}|{armor.feet or ""}`
+	local held, off = if selected then selected.id else "", if offhand then offhand.id else ""
+	local signature = `{held}|{off}|{armor.head or ""}|{armor.chest or ""}|{armor.legs or ""}|{armor.feet or ""}`
 	if not force and signatures[player] == signature then
 		return
 	end
 	signatures[player] = signature
-	Visuals.apply(character, armor, selected and selected.id)
+	Visuals.apply(character, armor, selected and selected.id, offhand and offhand.id)
 end
 
 -- Minecraft-style name tag with the health underneath.

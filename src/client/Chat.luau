@@ -42,20 +42,18 @@ local nextOrder = 0
 
 local function addLine(richText: string)
 	nextOrder += 1
-	local label = Ui.label({
+	local label = Ui.text({
 		LayoutOrder = nextOrder,
 		Size = UDim2.fromScale(1, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		BackgroundColor3 = Color3.new(0, 0, 0),
 		BackgroundTransparency = 0.5,
-		RichText = true,
 		Text = richText,
-		TextSize = 18,
 		TextWrapped = true,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Parent = container,
 	})
-	Ui.create("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3), Parent = label })
+	Ui.create("UIPadding", { PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 2), PaddingTop = UDim.new(0, 1), PaddingBottom = UDim.new(0, 0), Parent = label })
 	table.insert(lines, { label = label, at = os.clock() })
 	if #lines > MAX_LINES then
 		lines[1].label:Destroy()
@@ -128,8 +126,7 @@ local function update()
 		line.label.Visible = visible
 		if visible then
 			local fade = if open then 0 else math.clamp((age - (VISIBLE_SECONDS - FADE_SECONDS)) / FADE_SECONDS, 0, 1)
-			line.label.TextTransparency = fade
-			line.label.TextStrokeTransparency = 0.25 + 0.75 * fade
+			Ui.setTextTransparency(line.label, fade)
 			line.label.BackgroundTransparency = 0.5 + 0.5 * fade
 		end
 	end
@@ -147,38 +144,37 @@ function Chat.init()
 		end
 	end)
 
+	-- Sits above the hotbar's rows, 320 GUI pixels wide like Minecraft's chat.
 	container = Ui.create("Frame", {
 		Name = "Chat",
-		Size = UDim2.fromScale(0.4, 0.5),
-		Position = UDim2.new(0, 6, 1, -150),
+		Size = UDim2.fromOffset(320, 180),
+		Position = UDim2.new(0, 2, 1, -48),
 		AnchorPoint = Vector2.new(0, 1),
 		BackgroundTransparency = 1,
 		Parent = Ui.hud,
 	}, {
 		Ui.create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, VerticalAlignment = Enum.VerticalAlignment.Bottom }),
-		Ui.create("UISizeConstraint", { MinSize = Vector2.new(360, 0), MaxSize = Vector2.new(760, math.huge) }),
 	})
 
 	input = Ui.create("TextBox", {
 		Name = "ChatInput",
-		Size = UDim2.new(1, -12, 0, 34),
-		Position = UDim2.new(0, 6, 1, -6),
-		AnchorPoint = Vector2.new(0, 1),
+		Size = UDim2.new(1, -4, 0, 12),
+		Position = UDim2.new(0, 2, 1, -14),
 		BackgroundColor3 = Color3.new(0, 0, 0),
-		BackgroundTransparency = 0.45,
+		BackgroundTransparency = 0.5,
 		BorderSizePixel = 0,
 		ClearTextOnFocus = false,
 		Font = Ui.FONT,
 		PlaceholderText = "",
 		Text = "",
 		TextColor3 = Color3.new(1, 1, 1),
-		TextSize = 18,
+		TextSize = Ui.TEXT,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Visible = false,
-		ZIndex = 20,
+		ZIndex = 10,
 		Parent = Ui.overlay,
 	}, {
-		Ui.create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }),
+		Ui.create("UIPadding", { PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 2) }),
 	})
 
 	input.FocusLost:Connect(function(enterPressed)

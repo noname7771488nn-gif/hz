@@ -5,20 +5,24 @@ local Config = require(script.Parent.Config)
 
 local Sounds = {}
 
+-- Config.Sounds entries are an asset id, or { id = ..., pitch = ..., volume = ... }.
 local function make(name: string, volume: number?): Sound?
-	local id = Config.Sounds[name]
+	local entry = Config.Sounds[name]
+	local id = if type(entry) == "table" then entry.id else entry
 	if not id or id == "" then
 		return nil
 	end
 	local sound = Instance.new("Sound")
 	sound.Name = name
 	sound.SoundId = id
-	sound.Volume = volume or 0.5
+	sound.Volume = volume or (if type(entry) == "table" then entry.volume else nil) or 0.5
+	sound.PlaybackSpeed = if type(entry) == "table" then entry.pitch or 1 else 1
 	sound.RollOffMaxDistance = 60
 	return sound
 end
 
--- 3D sound at a position or on an instance. Played from the server, everyone nearby hears it.
+-- 3D sound at a position or on an instance. From the server everyone nearby hears it; from a
+-- client only that player does.
 function Sounds.play(name: string, where: Vector3 | Instance, volume: number?)
 	local sound = make(name, volume)
 	if not sound then

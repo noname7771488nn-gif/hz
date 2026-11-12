@@ -1,4 +1,4 @@
--- Mining, placing and attacking from the crosshair.
+-- Mining, placing, eating and attacking from the crosshair.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -49,6 +49,8 @@ local lastSwingSent = 0
 local leftDown = false
 local rightDown = false
 local nextPlaceAt = 0
+local nextUseAt = 0
+local eatingRequested = false
 
 -- The player or NPC character a part belongs to.
 local function characterFromPart(part: Instance): Model?
@@ -101,11 +103,15 @@ local function canAct(): boolean
 	return humanoid ~= nil and humanoid.Health > 0 and State.menu == nil and not State.dead
 end
 
-local function swing()
+-- Swings the arm. A swing at thin air restarts the attack cooldown; swings while mining don't.
+local function swing(missed: boolean)
 	Effects.localSwing()
-	if os.clock() - lastSwingSent > 0.1 then
+	if missed then
+		State.resetCooldown()
+	end
+	if missed or os.clock() - lastSwingSent > 0.1 then
 		lastSwingSent = os.clock()
-		Remotes.Swing:FireServer()
+		Remotes.Swing:FireServer(missed)
 	end
 end
 
@@ -118,12 +124,21 @@ end
 local function primaryAction()
 	local target = getTarget()
 	if target and target.kind == "character" then
-		swing()
+		-- The server works out the hit's strength from the cooldown, then restarts it.
+		Effects.localSwing()
 		Remotes.Attack:FireServer(target.character)
+		State.resetCooldown()
 	elseif not target then
-		swing()
+		swing(true)
 	end
 	-- Blocks are handled by the mining loop while the button is held.
+end
+
+local function stopEating()
+	if eatingRequested then
+		eatingRequested = false
+		Remotes.Use:FireServer(false)
+	end
 end
 
 local function placeBlock()
@@ -141,26 +156,45 @@ local function placeBlock()
 		Hud.actionBar(PROTECTED_MESSAGE)
 		return
 	end
-	swing()
+	Effects.localSwing()
 	Remotes.PlaceBlock:FireServer(cell.X, cell.Y, cell.Z)
+end
+
+-- Holding right-click eats the held food (or the offhand's), otherwise places blocks.
+local function useItem(now: number)
+	if State.edible() then
+		if player:GetAttribute("Eating") == nil and now >= nextUseAt then
+			nextUseAt = now + 0.3
+			eatingRequested = true
+			Remotes.Use:FireServer(true)
+		end
+	else
+		stopEating()
+		if now >= nextPlaceAt then
+			nextPlaceAt = now + PLACE_REPEAT
+			placeBlock()
+		end
+	end
 end
 
 local function update(dt: number)
 	if not canAct() then
 		selection.Adornee = nil
 		stopMining()
+		stopEating()
 		return
 	end
+	local now = os.clock()
 	local target = getTarget()
 	local block = if target and target.kind == "block" then target else nil
 	selection.Adornee = if block then block.part else nil
 
-	if leftDown and block and block.cell and block.part and os.clock() >= miningCooldownUntil then
+	if leftDown and block and block.cell and block.part and now >= miningCooldownUntil then
 		local cell = block.cell
 		if miningCell ~= cell then
 			if Zones.isProtected(cell.X, cell.Y, cell.Z) then
 				Hud.actionBar(PROTECTED_MESSAGE)
-				miningCooldownUntil = os.clock() + 0.5
+				miningCooldownUntil = now + 0.5
 				stopMining()
 				return
 			end
@@ -177,22 +211,23 @@ local function update(dt: number)
 		if def then
 			miningProgress += dt / Blocks.breakTime(def)
 			selection.SurfaceTransparency = 1 - math.min(miningProgress, 1) * 0.65
-			if os.clock() - lastSwingSent > SWING_INTERVAL then
-				swing()
+			if now - lastSwingSent > SWING_INTERVAL then
+				swing(false)
 			end
 			if miningProgress >= 1 then
 				Remotes.FinishBreak:FireServer(cell.X, cell.Y, cell.Z)
 				stopMining()
-				miningCooldownUntil = os.clock() + MINE_DELAY
+				miningCooldownUntil = now + MINE_DELAY
 			end
 		end
 	elseif miningCell then
 		stopMining()
 	end
 
-	if rightDown and os.clock() >= nextPlaceAt then
-		nextPlaceAt = os.clock() + PLACE_REPEAT
-		placeBlock()
+	if rightDown then
+		useItem(now)
+	else
+		stopEating()
 	end
 end
 
@@ -209,6 +244,7 @@ function Interaction.init()
 		elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
 			rightDown = true
 			nextPlaceAt = 0
+			nextUseAt = 0
 		end
 	end)
 	UserInputService.InputEnded:Connect(function(input)

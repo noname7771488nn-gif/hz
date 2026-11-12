@@ -1,18 +1,16 @@
--- Keyboard controls and camera: 1-9/scroll hotbar, E inventory, T or / chat, Q drop,
--- F5 perspective, Ctrl or double-tap W to sprint, Shift to sneak.
+-- Keyboard controls and camera: 1-9/scroll hotbar, E inventory, T or / chat, Q drop, F swap
+-- hands, F5 perspective, Ctrl or double-tap W to sprint, Shift to sneak.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local StarterGui = game:GetService("StarterGui")
 local UserInputService = game:GetService("UserInputService")
 
-local Shared = ReplicatedStorage:WaitForChild("Shared")
-local Config = require(Shared.Config)
-local Remotes = require(Shared.Remotes)
+local Config = require(ReplicatedStorage:WaitForChild("Shared").Config)
 
 local State = require(script.Parent.State)
 local Chat = require(script.Parent.Chat)
-local InventoryUi = require(script.Parent.InventoryUi)
+local Screens = require(script.Parent.Screens)
 
 local Controls = {}
 
@@ -33,9 +31,9 @@ local NUMBER_KEYS = {
 
 local NORMAL_FOV = 70
 local SPRINT_FOV = 80
+local EATING_SPEED = 4
 
 local firstPerson = true
-local sprinting = false
 local lastForwardTap = 0
 
 local function applyCamera()
@@ -74,40 +72,36 @@ local function onInput(input: InputObject, processed: boolean)
 	if processed then
 		return
 	end
-
-	local number = NUMBER_KEYS[key]
 	if State.menu then
-		-- A menu is open: only its own keys work.
-		if State.menu == "inventory" then
-			if key == Enum.KeyCode.E then
-				State.closeMenu()
-			elseif number then
-				InventoryUi.hotbarSwap(number)
-			end
-		elseif State.menu == "kits" and key == Enum.KeyCode.E then
+		-- A menu is open: it handles its own keys. E closes the inventory and kits screens.
+		if key == Enum.KeyCode.E and Screens.isOpen() then
 			State.closeMenu()
 		end
 		return
 	end
 
+	local number = NUMBER_KEYS[key]
 	if number then
 		State.select(number)
 	elseif key == Enum.KeyCode.E then
-		InventoryUi.toggle()
+		Screens.openInventory()
 	elseif key == Enum.KeyCode.T then
 		Chat.open("")
 	elseif key == Enum.KeyCode.Slash then
 		Chat.open("/")
 	elseif key == Enum.KeyCode.Q then
-		Remotes.DropItem:FireServer(UserInputService:IsKeyDown(Enum.KeyCode.LeftControl))
+		State.act("dropSelected", UserInputService:IsKeyDown(Enum.KeyCode.LeftControl), State.selected)
+	elseif key == Enum.KeyCode.F then
+		State.act("offhand", State.selected)
+		State.selectionChanged:Fire()
 	elseif key == Enum.KeyCode.F5 then
 		firstPerson = not firstPerson
 		applyCamera()
 	elseif key == Enum.KeyCode.LeftControl then
-		sprinting = true
+		State.sprinting = true
 	elseif key == Enum.KeyCode.W then
 		if os.clock() - lastForwardTap < 0.3 then
-			sprinting = true
+			State.sprinting = true
 		end
 		lastForwardTap = os.clock()
 	end
@@ -120,11 +114,20 @@ local function update(dt: number)
 		return
 	end
 	local sneaking = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and State.menu == nil
-	if humanoid.MoveDirection.Magnitude < 0.1 or sneaking then
-		sprinting = false
+	-- Sprinting stops when you stand still, sneak, eat or get too hungry.
+	if humanoid.MoveDirection.Magnitude < 0.1 or sneaking or not State.canSprint() then
+		State.sprinting = false
 	end
-	humanoid.WalkSpeed = if sneaking then Config.SNEAK_SPEED elseif sprinting then Config.SPRINT_SPEED else Config.WALK_SPEED
-	local targetFov = if sprinting then SPRINT_FOV else NORMAL_FOV
+	local speed = Config.WALK_SPEED
+	if player:GetAttribute("Eating") ~= nil then
+		speed = EATING_SPEED
+	elseif sneaking then
+		speed = Config.SNEAK_SPEED
+	elseif State.sprinting then
+		speed = Config.SPRINT_SPEED
+	end
+	humanoid.WalkSpeed = speed
+	local targetFov = if State.sprinting then SPRINT_FOV else NORMAL_FOV
 	camera.FieldOfView += (targetFov - camera.FieldOfView) * math.min(1, dt * 10)
 end
 
