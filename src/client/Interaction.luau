@@ -20,17 +20,18 @@ local Interaction = {}
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 local blocksFolder = workspace:WaitForChild("Blocks")
+local arenaFolder = workspace:WaitForChild("Arena")
 local dropsFolder = workspace:WaitForChild("Drops")
 
 local B = Config.BLOCK_SIZE
 local BLOCK_REACH = Config.BLOCK_REACH * B + B / 2
 local ATTACK_REACH = Config.ATTACK_REACH * B + 1.5
-local PLACE_REPEAT = 0.2 -- Minecraft's 4-tick right-click delay
+local PLACE_REPEAT = 0.2 -- 4-tick right-click delay
 local SWING_INTERVAL = 0.25 -- arm swings while mining
 local MINE_DELAY = 0.25 -- pause between consecutive blocks while holding the button
 local PROTECTED_MESSAGE = "Hey! Sorry, but you can't change blocks here."
 
-type Target = { kind: string, part: BasePart?, player: Player?, cell: Vector3?, normal: Vector3? }
+type Target = { kind: string, part: BasePart?, character: Model?, cell: Vector3?, normal: Vector3? }
 
 local params = RaycastParams.new()
 params.FilterType = Enum.RaycastFilterType.Exclude
@@ -49,11 +50,12 @@ local leftDown = false
 local rightDown = false
 local nextPlaceAt = 0
 
-local function playerFromPart(part: Instance): Player?
+-- The player or NPC character a part belongs to.
+local function characterFromPart(part: Instance): Model?
 	local node = part.Parent
 	while node and node ~= workspace do
 		if node:IsA("Model") and node:FindFirstChildOfClass("Humanoid") then
-			return Players:GetPlayerFromCharacter(node)
+			return node
 		end
 		node = node.Parent
 	end
@@ -81,11 +83,11 @@ local function getTarget(): Target?
 	end
 	local distance = (result.Position - eye).Magnitude
 	local hit = result.Instance
-	local other = playerFromPart(hit)
+	local other = characterFromPart(hit)
 	if other then
-		return if distance <= ATTACK_REACH then { kind = "player", player = other } else nil
+		return if distance <= ATTACK_REACH then { kind = "character", character = other } else nil
 	end
-	if hit.Parent == blocksFolder and distance <= BLOCK_REACH then
+	if (hit.Parent == blocksFolder or hit.Parent == arenaFolder) and distance <= BLOCK_REACH then
 		local cell = Vector3.new(math.round(hit.Position.X / B), math.round(hit.Position.Y / B), math.round(hit.Position.Z / B))
 		local n = result.Normal
 		return { kind = "block", part = hit :: BasePart, cell = cell, normal = Vector3.new(math.round(n.X), math.round(n.Y), math.round(n.Z)) }
@@ -96,7 +98,7 @@ end
 local function canAct(): boolean
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	return humanoid ~= nil and humanoid.Health > 0 and not Hud.isInventoryOpen() and not Hud.isDead()
+	return humanoid ~= nil and humanoid.Health > 0 and State.menu == nil and not State.dead
 end
 
 local function swing()
@@ -115,9 +117,9 @@ end
 
 local function primaryAction()
 	local target = getTarget()
-	if target and target.kind == "player" then
+	if target and target.kind == "character" then
 		swing()
-		Remotes.Attack:FireServer(target.player)
+		Remotes.Attack:FireServer(target.character)
 	elseif not target then
 		swing()
 	end

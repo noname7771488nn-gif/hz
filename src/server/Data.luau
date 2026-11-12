@@ -9,6 +9,8 @@ export type Profile = {
 	loaded: boolean,
 	kits: { [string]: number }, -- kit name -> unix time of last claim
 	inventory: any,
+	kills: number,
+	deaths: number,
 }
 
 local store: DataStore? = nil
@@ -30,7 +32,7 @@ local function keyFor(player: Player): string
 end
 
 function Data.load(player: Player): Profile
-	local profile: Profile = { loaded = false, kits = {}, inventory = nil }
+	local profile: Profile = { loaded = false, kits = {}, inventory = nil, kills = 0, deaths = 0 }
 	if store then
 		for attempt = 1, 3 do
 			local ok, result = pcall(function()
@@ -47,6 +49,8 @@ function Data.load(player: Player): Profile
 						end
 					end
 					profile.inventory = result.inventory
+					profile.kills = if type(result.kills) == "number" then result.kills else 0
+					profile.deaths = if type(result.deaths) == "number" then result.deaths else 0
 				end
 				break
 			end
@@ -63,7 +67,13 @@ function Data.save(player: Player, inventory: any)
 	if not store or not profile or not profile.loaded then
 		return
 	end
-	local payload = { version = 1, kits = profile.kits, inventory = inventory }
+	local payload = {
+		version = 1,
+		kits = profile.kits,
+		inventory = inventory,
+		kills = player:GetAttribute("Kills") or profile.kills,
+		deaths = player:GetAttribute("Deaths") or profile.deaths,
+	}
 	for attempt = 1, 3 do
 		local ok, err = pcall(function()
 			store:SetAsync(keyFor(player), payload, { player.UserId })

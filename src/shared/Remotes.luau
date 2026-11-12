@@ -13,12 +13,15 @@ local NAMES = {
 	"Attack",
 	"Swing",
 	"Respawn",
+	"Command",
+	"ClaimKit",
 	-- server -> client
 	"Inventory",
 	"Notify",
 	"Knockback",
 	"SwingFx",
 	"Died",
+	"KitInfo",
 }
 
 local Remotes: { [string]: RemoteEvent } = {}

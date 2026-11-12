@@ -1,10 +1,15 @@
--- Builds small 3D models for items. Used for held items, dropped items and inventory icons.
+-- Builds 3D models for items: textured cubes for blocks and extruded pixel sprites for everything
+-- else, like Minecraft's held and dropped items.
 local Blocks = require(script.Parent.Blocks)
 local Items = require(script.Parent.Items)
+local PixelArt = require(script.Parent.PixelArt)
 
 local ItemModels = {}
 
-local HANDLE = Color3.fromRGB(104, 76, 44)
+-- Sprite pixel the hand holds, for items that aren't gripped at their centre.
+local GRIPS = {
+	sword = { x = 3.5, y = 12.5 },
+}
 
 local function newPart(parent: Instance, size: Vector3, color: Color3, cframe: CFrame): Part
 	local part = Instance.new("Part")
@@ -24,14 +29,13 @@ local function newPart(parent: Instance, size: Vector3, color: Color3, cframe: C
 	return part
 end
 
-local ARMOR_SIZES = {
-	head = Vector3.new(1, 0.6, 1),
-	chest = Vector3.new(1, 1, 0.55),
-	legs = Vector3.new(0.9, 1, 0.5),
-	feet = Vector3.new(0.9, 0.4, 0.6),
-}
+function ItemModels.isSprite(key: string): boolean
+	local def = Items.get(key)
+	return def ~= nil and def.kind ~= "block"
+end
 
--- Returns a Model whose PrimaryPart is the grip point. All parts are unanchored, massless and welded.
+-- Returns a Model whose PrimaryPart is the grip point. Sprites lie in the PrimaryPart's XY plane
+-- (+X toward the sprite's right, +Y up). All parts are unanchored, massless and welded.
 function ItemModels.build(key: string, scale: number?): Model
 	local s = scale or 1
 	local def = Items.get(key)
@@ -39,25 +43,25 @@ function ItemModels.build(key: string, scale: number?): Model
 	model.Name = key
 
 	local primary: Part
-	if not def then
-		primary = newPart(model, Vector3.one * 0.5 * s, Color3.new(1, 0, 1), CFrame.identity)
-	elseif def.kind == "block" then
+	local image = if def and def.kind ~= "block" then PixelArt.get(key) else nil
+	if def and def.kind == "block" then
 		primary = newPart(model, Vector3.one * s, def.color, CFrame.identity)
 		local blockDef = def.block and Blocks.byKey[def.block]
 		if blockDef then
-			Blocks.applyAppearance(primary, blockDef)
+			Blocks.applyAppearance(primary, blockDef, Blocks.ALL_FACES, true)
 		end
-	elseif def.kind == "sword" then
-		primary = newPart(model, Vector3.new(0.16, 0.5, 0.16) * s, HANDLE, CFrame.identity)
-		newPart(model, Vector3.new(0.2, 0.12, 0.7) * s, def.color:Lerp(Color3.new(0, 0, 0), 0.35), CFrame.new(0, 0.3 * s, 0))
-		local blade = newPart(model, Vector3.new(0.12, 1.5, 0.32) * s, def.color, CFrame.new(0, 1.11 * s, 0))
-		blade.Reflectance = 0.15
-	elseif def.kind == "armor" then
-		primary = newPart(model, (ARMOR_SIZES[def.slot or "chest"] or Vector3.one) * s, def.color, CFrame.identity)
-		primary.Reflectance = 0.15
+	elseif def and image then
+		local unit = (if def.kind == "sword" then 1.8 else 1.2) * s / image.width
+		local grip = GRIPS[def.kind] or { x = image.width / 2, y = image.height / 2 }
+		primary = newPart(model, Vector3.one * unit, def.color, CFrame.identity)
+		primary.Transparency = 1
+		for _, run in PixelArt.runs(image) do
+			local x = (run.x + run.w / 2 - grip.x) * unit
+			local y = (grip.y - run.y - 0.5) * unit
+			newPart(model, Vector3.new(run.w * unit, unit, unit), Color3.fromRGB(run.r, run.g, run.b), CFrame.new(x, y, 0))
+		end
 	else
-		local rotation = if key == "diamond" then CFrame.Angles(0, math.rad(45), math.rad(45)) else CFrame.identity
-		primary = newPart(model, Vector3.one * 0.5 * s, def.color, rotation)
+		primary = newPart(model, Vector3.one * 0.5 * s, if def then def.color else Color3.new(1, 0, 1), CFrame.identity)
 	end
 
 	model.PrimaryPart = primary

@@ -22,7 +22,9 @@ function Teleport.request(player: Player, getTarget: () -> CFrame?, label: strin
 		Messages.send(player, combatMessage(player), "error")
 		return false
 	end
-	local character, humanoid, root = Combat.aliveCharacter(player)
+	local entity = Combat.ofPlayer(player)
+	local humanoid, root = Combat.alive(entity)
+	local character = entity and entity.model
 	if not character or not humanoid or not root then
 		return false
 	end

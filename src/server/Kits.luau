@@ -2,6 +2,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
+local Remotes = require(Shared.Remotes)
 local Sounds = require(Shared.Sounds)
 
 local Combat = require(script.Parent.Combat)
@@ -9,6 +10,7 @@ local Data = require(script.Parent.Data)
 local Drops = require(script.Parent.Drops)
 local Inventory = require(script.Parent.Inventory)
 local Messages = require(script.Parent.Messages)
+local RateLimit = require(script.Parent.RateLimit)
 
 local Kits = {}
 
@@ -40,30 +42,24 @@ function Kits.remaining(player: Player, name: string): number
 	return math.max(0, lastClaim(player, name) + kit.cooldown - os.time())
 end
 
-function Kits.list(player: Player)
-	Messages.send(player, "Kits:", "info")
+-- Sends each kit's "ready at" unix time to the client, optionally opening the kits menu.
+function Kits.sendInfo(player: Player, open: boolean)
+	local readyAt = {}
 	for _, name in Config.KIT_ORDER do
-		local kit = Config.Kits[name]
-		local remaining = Kits.remaining(player, name)
-		local status = if remaining > 0 then `available in {Kits.formatDuration(remaining)}` else "available now"
-		Messages.send(player, ` - {name} ({kit.displayName}): {status}`, if remaining > 0 then "error" else "success")
+		readyAt[name] = lastClaim(player, name) + Config.Kits[name].cooldown
 	end
+	Remotes.KitInfo:FireClient(player, readyAt, open)
 end
 
--- Claim handler for /kit [name]. With a single kit, /kit on its own claims it.
-function Kits.claim(player: Player, requested: string?)
-	local name = if requested then string.lower(requested) elseif #Config.KIT_ORDER == 1 then Config.KIT_ORDER[1] else nil
-	if not name then
-		Kits.list(player)
-		return
-	end
+function Kits.claim(player: Player, requested: string)
+	local name = string.lower(requested)
 	local kit = Config.Kits[name]
 	if not kit then
 		Messages.send(player, `Kit '{name}' does not exist. Use /kits to see available kits.`, "error")
 		return
 	end
-	local character, _, root = Combat.aliveCharacter(player)
-	if not character or not root then
+	local root = Combat.rootOf(player)
+	if not root then
 		return
 	end
 	local remaining = Kits.remaining(player, name)
@@ -95,8 +91,17 @@ function Kits.claim(player: Player, requested: string?)
 	if overflow then
 		Messages.send(player, "Your inventory was full, so some items were dropped at your feet.", "error")
 	end
+	Kits.sendInfo(player, false)
 
 	task.spawn(Data.save, player, Inventory.serialize(player))
+end
+
+function Kits.init()
+	Remotes.ClaimKit.OnServerEvent:Connect(function(player, name)
+		if RateLimit.allow(player, "claimKit", 3) and type(name) == "string" and #name <= 32 then
+			Kits.claim(player, name)
+		end
+	end)
 end
 
 return Kits

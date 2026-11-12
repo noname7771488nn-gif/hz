@@ -35,7 +35,7 @@ local function isCell(x: any, y: any, z: any): boolean
 end
 
 local function inReach(player: Player, x: number, y: number, z: number): boolean
-	local _, _, root = Combat.aliveCharacter(player)
+	local root = Combat.rootOf(player)
 	return root ~= nil and (root.Position - World.toWorld(x, y, z)).Magnitude <= MAX_REACH
 end
 
@@ -44,7 +44,7 @@ local function overlapsPlayer(x: number, y: number, z: number): boolean
 	local center = World.toWorld(x, y, z)
 	local half = B / 2
 	for _, player in Players:GetPlayers() do
-		local _, _, root = Combat.aliveCharacter(player)
+		local root = Combat.rootOf(player)
 		if root then
 			local p = root.Position
 			if math.abs(p.X - center.X) < half + 1

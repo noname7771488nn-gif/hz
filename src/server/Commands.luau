@@ -1,13 +1,15 @@
--- Slash commands via TextChatService. Admin-style commands are registered so they are recognised,
--- but always answer with the permission-denied message.
+-- Slash commands, sent by the client's chat box. Admin-style commands are recognised but always
+-- answer with the permission-denied message.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TextChatService = game:GetService("TextChatService")
 
-local Config = require(ReplicatedStorage:WaitForChild("Shared").Config)
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = require(Shared.Config)
+local Remotes = require(Shared.Remotes)
 
 local Kits = require(script.Parent.Kits)
 local Messages = require(script.Parent.Messages)
+local RateLimit = require(script.Parent.RateLimit)
 local Structures = require(script.Parent.Structures)
 local Teleport = require(script.Parent.Teleport)
 
@@ -27,9 +29,10 @@ local ADMIN_COMMANDS = {
 local HELP = {
 	"--- Commands ---",
 	"/spawn - Teleport to spawn",
-	"/kit [name] - Claim a kit (/kits lists them)",
+	"/kits - Open the kits menu (/kit <name> claims one)",
 	"/rtp - Random teleport into the wilderness",
-	"/warp pvp (or /pvp) - Go to the PvP arena",
+	"/warp pvp (or /pvp) - Go to the PvP warp",
+	"/stats - Your kills and deaths",
 	"/list - Show who is online",
 }
 
@@ -54,11 +57,15 @@ register({ "spawn" }, function(player)
 end)
 
 register({ "kit" }, function(player, args)
-	Kits.claim(player, args[1])
+	if args[1] then
+		Kits.claim(player, args[1])
+	else
+		Kits.sendInfo(player, true)
+	end
 end)
 
 register({ "kits" }, function(player)
-	Kits.list(player)
+	Kits.sendInfo(player, true)
 end)
 
 register({ "rtp", "wild", "randomtp" }, function(player)
@@ -73,7 +80,7 @@ register({ "rtp", "wild", "randomtp" }, function(player)
 end)
 
 local function warpToArena(player: Player)
-	Teleport.request(player, Structures.arenaCFrame, "the PvP arena")
+	Teleport.request(player, Structures.arenaSpawnCFrame, "the PvP warp")
 end
 
 register({ "pvp" }, warpToArena)
@@ -87,6 +94,11 @@ register({ "warp", "warps" }, function(player, args)
 	else
 		Messages.send(player, `Warp '{name}' does not exist.`, "error")
 	end
+end)
+
+register({ "stats" }, function(player)
+	local kills, deaths = player:GetAttribute("Kills") or 0, player:GetAttribute("Deaths") or 0
+	Messages.send(player, `Kills: {kills}  Deaths: {deaths}  Streak: {player:GetAttribute("Streak") or 0}`, "info")
 end)
 
 register({ "list", "online" }, function(player)
@@ -103,54 +115,31 @@ for _, name in ADMIN_COMMANDS do
 	end
 end
 
-local function parseArgs(text: string): { string }
-	local args = {}
+local function run(player: Player, text: string)
+	local words = {}
 	for word in string.gmatch(text, "%S+") do
-		table.insert(args, word)
+		table.insert(words, word)
 	end
-	table.remove(args, 1)
-	return args
+	local name = string.lower(string.sub(table.remove(words, 1) or "", 2))
+	local handler = handlers[name]
+	if not handler then
+		Messages.send(player, 'Unknown command. Type "/help" for help.', "error")
+		return
+	end
+	local ok, err = pcall(handler, player, words)
+	if not ok then
+		warn(`[BlockCraft] /{name} failed for {player.Name}:`, err)
+		Messages.send(player, "An internal error occurred while attempting to perform this command.", "error")
+	end
 end
 
 function Commands.init()
-	for alias, handler in handlers do
-		local command = Instance.new("TextChatCommand")
-		command.Name = "BlockCraft_" .. alias
-		command.PrimaryAlias = "/" .. alias
-		command.Triggered:Connect(function(textSource, text)
-			local player = Players:GetPlayerByUserId(textSource.UserId)
-			if not player then
-				return
-			end
-			local ok, err = pcall(handler, player, parseArgs(text))
-			if not ok then
-				warn(`[BlockCraft] /{alias} failed for {player.Name}:`, err)
-				Messages.send(player, "An internal error occurred while attempting to perform this command.", "error")
-			end
-		end)
-		command.Parent = TextChatService
-	end
-
-	-- Unknown "/..." messages are never shown in public chat.
-	task.spawn(function()
-		local channels = TextChatService:WaitForChild("TextChannels", 30)
-		local general = channels and channels:WaitForChild("RBXGeneral", 30) :: TextChannel?
-		if not general then
-			warn("[BlockCraft] RBXGeneral channel not found; unknown commands will be shown in chat")
+	Remotes.Command.OnServerEvent:Connect(function(player, text)
+		if type(text) ~= "string" or #text > 200 or string.sub(text, 1, 1) ~= "/" then
 			return
 		end
-		general.ShouldDeliverCallback = function(message: TextChatMessage, target: TextSource)
-			if string.sub(message.Text, 1, 1) ~= "/" then
-				return true
-			end
-			local source = message.TextSource
-			if source and source.UserId == target.UserId then
-				local sender = Players:GetPlayerByUserId(source.UserId)
-				if sender then
-					Messages.send(sender, 'Unknown command. Type "/help" for help.', "error")
-				end
-			end
-			return false
+		if RateLimit.allow(player, "command", 4) then
+			run(player, text)
 		end
 	end)
 end

@@ -1,9 +1,8 @@
--- Spawn hub, floating PvP arena, world border and teleport destinations.
+-- Spawn hub, the PvP warp (safe spawn platform above an FFA arena), world border and teleport spots.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
-local Blocks = require(Shared.Blocks)
 local Zones = require(Shared.Zones)
 
 local World = require(script.Parent.World)
@@ -15,10 +14,8 @@ local SPAWN = Config.SPAWN
 local ARENA = Config.ARENA
 local ID = World.ID
 
--- Root part height above the block it stands on.
-local STAND_OFFSET = B / 2 + 3.2
-
-local ARENA_PILLARS = { { -7, -7 }, { 7, -7 }, { -7, 7 }, { 7, 7 } }
+-- Root part height above the centre of the block a character stands on.
+local STAND_OFFSET = B / 2 + 3.1
 
 -- Voxel spawn hub; called during generation before parts are built.
 function Structures.writeSpawn()
@@ -30,16 +27,47 @@ function Structures.writeSpawn()
 				World.rawSet(x, y, z, 0)
 			end
 			local ring = math.max(math.abs(x), math.abs(z))
-			World.rawSet(x, fy, z, if ring == 4 or ring == 0 then ID.smooth_stone else ID.stone_bricks)
+			local path = math.abs(x) <= 1 or math.abs(z) <= 1
+			local floor = ID.stone_bricks
+			if ring <= 1 or (not path and (ring == 8 or ring == r)) then
+				floor = ID.smooth_stone
+			elseif path then
+				floor = ID.oak_planks
+			elseif (x + z) % 7 == 0 then
+				floor = ID.cobblestone
+			end
+			World.rawSet(x, fy, z, floor)
 
-			local gate = math.abs(x) <= 1 or math.abs(z) <= 1
-			if ring == r and not gate then
+			-- Low perimeter wall with a gate on each side.
+			if ring == r and not path then
 				World.rawSet(x, fy + 1, z, ID.stone_bricks)
+				if (x + z) % 4 == 0 then
+					World.rawSet(x, fy + 2, z, ID.stone_bricks)
+				end
 			end
 		end
 	end
 	World.rawSet(0, fy, 0, ID.glowstone)
 
+	-- Open pavilion: four pillars carrying a plank ring around the spawn point.
+	for _, c in { { 5, 5 }, { -5, 5 }, { 5, -5 }, { -5, -5 } } do
+		for y = fy + 1, fy + 4 do
+			World.rawSet(c[1], y, c[2], ID.oak_log)
+		end
+	end
+	for x = -6, 6 do
+		for z = -6, 6 do
+			local ring = math.max(math.abs(x), math.abs(z))
+			if ring >= 5 then
+				World.rawSet(x, fy + 5, z, if ring == 6 then ID.oak_planks else ID.stone_bricks)
+			end
+		end
+	end
+	for _, c in { { 5, 0 }, { -5, 0 }, { 0, 5 }, { 0, -5 } } do
+		World.rawSet(c[1], fy + 5, c[2], ID.glowstone)
+	end
+
+	-- Lamp posts in the corners.
 	for _, c in { { r - 2, r - 2 }, { -r + 2, r - 2 }, { r - 2, -r + 2 }, { -r + 2, -r + 2 } } do
 		for y = fy + 1, fy + 3 do
 			World.rawSet(c[1], y, c[2], ID.oak_log)
@@ -61,8 +89,8 @@ local function hologram(position: Vector3, lines: { { text: string, color: Color
 	anchor.Parent = workspace
 
 	local billboard = Instance.new("BillboardGui")
-	billboard.Size = UDim2.fromScale(24, #lines * 1.6)
-	billboard.MaxDistance = 150
+	billboard.Size = UDim2.fromScale(26, #lines * 1.5)
+	billboard.MaxDistance = 160
 	billboard.LightInfluence = 0
 	billboard.Parent = anchor
 
@@ -84,9 +112,9 @@ local function hologram(position: Vector3, lines: { { text: string, color: Color
 	end
 end
 
-local function borderWall(position: Vector3, size: Vector3)
+local function barrier(position: Vector3, size: Vector3)
 	local wall = Instance.new("Part")
-	wall.Name = "WorldBorder"
+	wall.Name = "Barrier"
 	wall.Anchored = true
 	wall.CanQuery = false
 	wall.Transparency = 1
@@ -94,6 +122,17 @@ local function borderWall(position: Vector3, size: Vector3)
 	wall.Position = position
 	wall.Parent = workspace
 end
+
+-- Four invisible walls around a square, so nobody can be knocked or climb out.
+local function fence(center: Vector3, half: number, height: number)
+	local span = half * 2 + 4
+	barrier(center + Vector3.new(-half - 1, height / 2, 0), Vector3.new(2, height, span))
+	barrier(center + Vector3.new(half + 1, height / 2, 0), Vector3.new(2, height, span))
+	barrier(center + Vector3.new(0, height / 2, -half - 1), Vector3.new(span, height, 2))
+	barrier(center + Vector3.new(0, height / 2, half + 1), Vector3.new(span, height, 2))
+end
+
+local GOLD, WHITE, GRAY, RED = Color3.fromRGB(255, 200, 60), Color3.new(1, 1, 1), Color3.fromRGB(190, 190, 190), Color3.fromRGB(255, 85, 85)
 
 function Structures.buildDecor()
 	local fy = SPAWN.floorY
@@ -110,114 +149,158 @@ function Structures.buildDecor()
 	spawn.Position = Vector3.new(0, fy * B + B / 2 + 0.5, 0)
 	spawn.Parent = workspace
 
-	local gold, white, gray = Color3.fromRGB(255, 200, 60), Color3.new(1, 1, 1), Color3.fromRGB(190, 190, 190)
-	hologram(Vector3.new(0, (fy + 6) * B, 0), {
-		{ text = `Welcome to {Config.GAME_NAME}!`, color = gold },
-		{ text = "/kit - claim the Diamond kit", color = white },
-		{ text = "/rtp - teleport into the wild", color = white },
-		{ text = "/pvp - PvP arena    /help - all commands", color = white },
-		{ text = "Spawn is protected", color = gray },
+	hologram(Vector3.new(0, (fy + 3.4) * B, -3 * B), {
+		{ text = `Welcome to {Config.GAME_NAME}!`, color = GOLD },
+		{ text = "/kits - choose a kit", color = WHITE },
+		{ text = "/pvp - PvP warp    /rtp - into the wild", color = WHITE },
+		{ text = "Press T to chat, /help for commands", color = GRAY },
 	})
 
-	-- Invisible world border.
-	local span = World.RADIUS * 2 * B
+	-- World border. The world occupies block centres -R .. R-1, so shift by half a block.
 	local half = World.RADIUS * B
-	local height = World.HEIGHT * B * 2
-	borderWall(Vector3.new(-half - B / 2 - 1, height / 2, 0), Vector3.new(2, height, span + 8))
-	borderWall(Vector3.new(half - B / 2 + 1, height / 2, 0), Vector3.new(2, height, span + 8))
-	borderWall(Vector3.new(0, height / 2, -half - B / 2 - 1), Vector3.new(span + 8, height, 2))
-	borderWall(Vector3.new(0, height / 2, half - B / 2 + 1), Vector3.new(span + 8, height, 2))
+	fence(Vector3.new(-B / 2, 0, -B / 2), half, World.HEIGHT * B * 2)
 end
 
--- Floating arena outside the voxel world. Built from plain parts so it can never be edited.
+-- The PvP warp, built from fixed blocks outside the voxel world so it can never be edited.
 function Structures.buildArena()
-	local model = Instance.new("Model")
-	model.Name = "PvPArena"
+	local folder = Instance.new("Folder")
+	folder.Name = "Arena"
 
-	local function place(key: string, x: number, y: number, z: number)
-		local def = Blocks.byKey[key]
-		local part = Instance.new("Part")
-		part.Name = key
-		part.Anchored = true
-		part.Size = Vector3.one * B
-		part.CFrame = CFrame.new((ARENA.centerX + x) * B, y * B, (ARENA.centerZ + z) * B)
-		Blocks.applyAppearance(part, def)
-		if def.light then
-			local light = Instance.new("PointLight")
-			light.Color = def.light
-			light.Range = 20
-			light.Parent = part
+	local cells: { [Vector3]: number } = {}
+	local function set(x: number, y: number, z: number, key: string)
+		cells[Vector3.new(ARENA.centerX + x, y, ARENA.centerZ + z)] = ID[key]
+	end
+	local function box(x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, key: string)
+		for x = x0, x1 do
+			for y = y0, y1 do
+				for z = z0, z1 do
+					set(x, y, z, key)
+				end
+			end
 		end
-		part.Parent = model
 	end
 
 	local r = ARENA.radius
 	local fy = ARENA.floorY
+	local top = fy + ARENA.wallHeight
+
+	-- Floor: worn stone with gravel and cobble patches, ringed by deepslate walls.
 	for x = -r, r do
 		for z = -r, r do
 			local ring = math.max(math.abs(x), math.abs(z))
-			local floor = if ring == r then "obsidian" elseif ring % 5 == 0 then "stone_bricks" else "smooth_stone"
-			place(floor, x, fy, z)
+			local n = math.noise(x / 6, z / 6, 3.3)
+			local floor = "stone_bricks"
 			if ring == r then
-				for y = fy + 1, fy + 5 do
-					place("stone_bricks", x, y, z)
+				floor = "deepslate_bricks"
+			elseif ring <= 2 or ring % 9 == 0 then
+				floor = "smooth_stone"
+			elseif n > 0.22 then
+				floor = "gravel"
+			elseif n < -0.22 then
+				floor = "cobblestone"
+			end
+			set(x, fy, z, floor)
+			if ring == r then
+				for y = fy + 1, top - 1 do
+					set(x, y, z, if y == fy + 3 and (x + z) % 6 == 0 then "glowstone" else "deepslate_bricks")
 				end
-				place("obsidian", x, fy + 6, z)
+				set(x, top, z, "obsidian")
 			end
 		end
 	end
-	for _, p in ARENA_PILLARS do
-		for y = fy + 1, fy + 3 do
-			place("cobblestone", p[1], y, p[2])
-		end
-		place("glowstone", p[1], fy + 4, p[2])
-	end
-	model.Parent = workspace
+	set(0, fy, 0, "glowstone")
 
-	hologram(Vector3.new(ARENA.centerX * B, (fy + 9) * B, ARENA.centerZ * B), {
-		{ text = "PvP Arena", color = Color3.fromRGB(255, 85, 85) },
-		{ text = "Kill players to loot their items", color = Color3.new(1, 1, 1) },
+	-- Cover: pillars, low walls to jump over and taller corners to fight around.
+	for _, sx in { -1, 1 } do
+		for _, sz in { -1, 1 } do
+			box(sx * 11 - 1, sx * 11, fy + 1, fy + 3, sz * 11 - 1, sz * 11, "cobblestone")
+			box(sx * 11 - 1, sx * 11, fy + 4, fy + 4, sz * 11 - 1, sz * 11, "stone_bricks")
+			box(sx * 19, sx * 19, fy + 1, fy + 2, math.min(sz * 16, sz * 20), math.max(sz * 16, sz * 20), "oak_planks")
+			box(math.min(sx * 16, sx * 19), math.max(sx * 16, sx * 19), fy + 1, fy + 2, sz * 20, sz * 20, "oak_planks")
+		end
+		box(-4, 4, fy + 1, fy + 1, sx * 16, sx * 16, "stone_bricks")
+		box(sx * 16, sx * 16, fy + 1, fy + 1, -4, 4, "stone_bricks")
+	end
+
+	-- Safe spawn platform floating above the centre.
+	local sr = ARENA.spawnRadius
+	local py = fy + ARENA.spawnHeight
+	for x = -sr, sr do
+		for z = -sr, sr do
+			local ring = math.max(math.abs(x), math.abs(z))
+			set(x, py, z, if ring == sr then "red_concrete" elseif ring == 0 then "glowstone" else "white_concrete")
+		end
+	end
+	for _, sx in { -sr, sr } do
+		for _, sz in { -sr, sr } do
+			box(sx, sx, py + 1, py + 2, sz, sz, "oak_log")
+			set(sx, py + 3, sz, "glowstone")
+		end
+	end
+
+	-- Faces under the floor and outside the walls are never seen.
+	World.buildStatic(cells, folder, function(cell: Vector3): boolean
+		return cell.Y < fy or math.abs(cell.X - ARENA.centerX) > r or math.abs(cell.Z - ARENA.centerZ) > r
+	end)
+	folder.Parent = workspace
+
+	local center = Vector3.new(ARENA.centerX * B, fy * B, ARENA.centerZ * B)
+	fence(center, (r + 0.5) * B, 400)
+
+	hologram(Vector3.new(center.X, (py + 4.5) * B, center.Z), {
+		{ text = "PvP Warp", color = RED },
+		{ text = "You are safe up here", color = WHITE },
+		{ text = "Jump down to fight - no fall damage", color = WHITE },
+		{ text = "Kill players to loot their items", color = GRAY },
 	})
 end
 
 function Structures.spawnCFrame(): CFrame
-	local offset = Vector3.new(math.random(-3, 3), 0, math.random(2, 5)) * B
+	local offset = Vector3.new(math.random(-3, 3), 0, math.random(2, 4)) * B
 	local position = Vector3.new(0, SPAWN.floorY * B + STAND_OFFSET, 0) + offset
-	return CFrame.lookAt(position, Vector3.new(0, position.Y, 0))
+	return CFrame.lookAt(position, Vector3.new(0, position.Y, -30))
 end
 
-function Structures.arenaCFrame(): CFrame
-	local r = ARENA.radius - 2
+-- A spot on the PvP warp's safe platform, facing outward over the arena.
+function Structures.arenaSpawnCFrame(): CFrame
+	local r = ARENA.spawnRadius - 2
 	local x, z
 	repeat
 		x, z = math.random(-r, r), math.random(-r, r)
-		local blocked = false
-		for _, p in ARENA_PILLARS do
-			if math.abs(p[1] - x) <= 1 and math.abs(p[2] - z) <= 1 then
-				blocked = true
-			end
-		end
-	until not blocked
-	local position = Vector3.new((ARENA.centerX + x) * B, ARENA.floorY * B + STAND_OFFSET, (ARENA.centerZ + z) * B)
-	return CFrame.lookAt(position, Vector3.new(ARENA.centerX * B, position.Y, ARENA.centerZ * B))
+	until x ~= 0 or z ~= 0
+	local y = (ARENA.floorY + ARENA.spawnHeight) * B + STAND_OFFSET
+	local position = Vector3.new((ARENA.centerX + x) * B, y, (ARENA.centerZ + z) * B)
+	return CFrame.lookAt(position, position + Vector3.new(x, 0, z))
+end
+
+-- Where the bot (re)spawns: on the arena floor beside the centre pad.
+function Structures.arenaFloorCFrame(): CFrame
+	local angle = math.random() * math.pi * 2
+	local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * 6 * B
+	local center = Vector3.new(ARENA.centerX * B, ARENA.floorY * B + STAND_OFFSET, ARENA.centerZ * B)
+	return CFrame.lookAt(center + offset, center)
 end
 
 -- Random safe spot on the surface of the wilderness, or nil if none was found.
 function Structures.randomWildCFrame(): CFrame?
 	local margin = 6
-	local r = World.RADIUS
+	-- Only land where the terrain's parts already exist.
+	local r = math.min(World.RADIUS, World.builtRadius) - margin
+	if r <= SPAWN.radius + 12 then
+		return nil
+	end
 	for _ = 1, 60 do
-		local x = math.random(-r + margin, r - margin - 1)
-		local z = math.random(-r + margin, r - margin - 1)
-		if Zones.cellZone(x, z) ~= "wild" or math.max(math.abs(x), math.abs(z)) <= SPAWN.radius + 10 then
+		local x = math.random(-r, r - 1)
+		local z = math.random(-r, r - 1)
+		if math.max(math.abs(x), math.abs(z)) <= SPAWN.radius + 10 then
 			continue
 		end
 		local y = World.topY(x, z)
-		if not y or y + 3 >= World.HEIGHT then
+		if not y or y + 3 >= World.HEIGHT or Zones.cellZone(x, y, z) ~= "wild" then
 			continue
 		end
 		local top = World.get(x, y, z)
-		if top == ID.oak_leaves or top == ID.oak_log then
+		if top == ID.oak_leaves or top == ID.oak_log or top == ID.birch_leaves or top == ID.birch_log then
 			continue
 		end
 		return CFrame.new(x * B, y * B + STAND_OFFSET, z * B)

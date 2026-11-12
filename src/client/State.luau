@@ -1,4 +1,5 @@
--- Client copy of the local player's inventory (the server stays authoritative).
+-- Client copy of the local player's inventory (the server stays authoritative), plus which menu
+-- is open.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -10,9 +11,13 @@ local State = {
 	armor = {} :: { [string]: Items.Stack },
 	selected = 1,
 	received = false,
+	menu = nil :: string?, -- "inventory" | "kits" | "chat" | nil
+	dead = false,
 	changed = Instance.new("BindableEvent"),
 	selectionChanged = Instance.new("BindableEvent"),
 }
+
+local closers: { [string]: () -> () } = {}
 
 function State.selectedStack(): Items.Stack?
 	return State.slots[State.selected]
@@ -42,6 +47,26 @@ function State.armorPoints(): number
 		total += if def then def.armor or 0 else 0
 	end
 	return total
+end
+
+-- Menus are exclusive: opening one closes whichever was open.
+function State.registerMenu(name: string, close: () -> ())
+	closers[name] = close
+end
+
+function State.closeMenu()
+	local name = State.menu
+	if name then
+		State.menu = nil
+		closers[name]()
+	end
+end
+
+function State.openMenu(name: string)
+	if State.menu ~= name then
+		State.closeMenu()
+		State.menu = name
+	end
 end
 
 Remotes.Inventory.OnClientEvent:Connect(function(payload)

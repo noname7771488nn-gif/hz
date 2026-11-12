@@ -1,5 +1,5 @@
--- Keyboard controls and camera: 1-9/scroll hotbar, E inventory, Q drop, F5 perspective,
--- Ctrl or double-tap W to sprint, Shift to sneak.
+-- Keyboard controls and camera: 1-9/scroll hotbar, E inventory, T or / chat, Q drop,
+-- F5 perspective, Ctrl or double-tap W to sprint, Shift to sneak.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -11,7 +11,8 @@ local Config = require(Shared.Config)
 local Remotes = require(Shared.Remotes)
 
 local State = require(script.Parent.State)
-local Hud = require(script.Parent.Hud)
+local Chat = require(script.Parent.Chat)
+local InventoryUi = require(script.Parent.InventoryUi)
 
 local Controls = {}
 
@@ -65,24 +66,39 @@ local function setCoreGui()
 end
 
 local function onInput(input: InputObject, processed: boolean)
+	local key = input.KeyCode
+	if key == Enum.KeyCode.Escape and State.menu then
+		State.closeMenu()
+		return
+	end
 	if processed then
 		return
 	end
-	local key = input.KeyCode
+
 	local number = NUMBER_KEYS[key]
+	if State.menu then
+		-- A menu is open: only its own keys work.
+		if State.menu == "inventory" then
+			if key == Enum.KeyCode.E then
+				State.closeMenu()
+			elseif number then
+				InventoryUi.hotbarSwap(number)
+			end
+		elseif State.menu == "kits" and key == Enum.KeyCode.E then
+			State.closeMenu()
+		end
+		return
+	end
+
 	if number then
-		if Hud.isInventoryOpen() then
-			Hud.hotbarSwap(number)
-		else
-			State.select(number)
-		end
+		State.select(number)
 	elseif key == Enum.KeyCode.E then
-		if not Hud.isDead() then
-			Hud.setInventoryOpen(not Hud.isInventoryOpen())
-		end
-	elseif key == Enum.KeyCode.Escape and Hud.isInventoryOpen() then
-		Hud.setInventoryOpen(false)
-	elseif key == Enum.KeyCode.Q and not Hud.isInventoryOpen() then
+		InventoryUi.toggle()
+	elseif key == Enum.KeyCode.T then
+		Chat.open("")
+	elseif key == Enum.KeyCode.Slash then
+		Chat.open("/")
+	elseif key == Enum.KeyCode.Q then
 		Remotes.DropItem:FireServer(UserInputService:IsKeyDown(Enum.KeyCode.LeftControl))
 	elseif key == Enum.KeyCode.F5 then
 		firstPerson = not firstPerson
@@ -103,7 +119,7 @@ local function update(dt: number)
 	if not humanoid then
 		return
 	end
-	local sneaking = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and not UserInputService:GetFocusedTextBox()
+	local sneaking = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and State.menu == nil
 	if humanoid.MoveDirection.Magnitude < 0.1 or sneaking then
 		sprinting = false
 	end
@@ -117,7 +133,7 @@ function Controls.init()
 	applyCamera()
 	UserInputService.InputBegan:Connect(onInput)
 	UserInputService.InputChanged:Connect(function(input, processed)
-		if processed or Hud.isInventoryOpen() then
+		if processed or State.menu then
 			return
 		end
 		if input.UserInputType == Enum.UserInputType.MouseWheel then
