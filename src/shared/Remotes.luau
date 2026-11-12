@@ -4,14 +4,13 @@ local RunService = game:GetService("RunService")
 local NAMES = {
 	-- client -> server
 	"SelectSlot",
-	"MoveSlot",
-	"QuickMove",
-	"DropItem",
+	"InvAction", -- inventory clicks, drops and swaps: (seq, action, a, b, c)
 	"StartBreak",
 	"FinishBreak",
 	"PlaceBlock",
 	"Attack",
 	"Swing",
+	"Use", -- start or stop eating
 	"Respawn",
 	"Command",
 	"ClaimKit",
@@ -20,6 +19,7 @@ local NAMES = {
 	"Notify",
 	"Knockback",
 	"SwingFx",
+	"HitFx",
 	"Died",
 	"KitInfo",
 }

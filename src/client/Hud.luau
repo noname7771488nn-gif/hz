@@ -1,4 +1,5 @@
--- The always-on HUD: hotbar, hearts, armor, messages, sidebar scoreboard, crosshair, death screen.
+-- The always-on HUD, laid out like Minecraft's: hotbar, hearts, armor, hunger, experience bar,
+-- held-item name, crosshair with the attack indicator, sidebar scoreboard and the death screen.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -8,6 +9,7 @@ local Config = require(Shared.Config)
 local Items = require(Shared.Items)
 local Remotes = require(Shared.Remotes)
 local Sounds = require(Shared.Sounds)
+local Xp = require(Shared.Xp)
 local Zones = require(Shared.Zones)
 
 local Pixel = require(script.Parent.Pixel)
@@ -17,76 +19,95 @@ local Ui = require(script.Parent.Ui)
 local Hud = {}
 
 local player = Players.LocalPlayer
+local rgb = Color3.fromRGB
 
-local HOTBAR_WIDTH = 9 * Ui.SLOT + 6
-local BOTTOM_HEIGHT = 216
-local PIP = 27 -- hearts and armor icons: 9px sprites at 3x
-local PIP_STEP = 24
+-- All positions are GUI pixels inside a 182x80 block that sits on the bottom edge, centred,
+-- matching Minecraft's HUD offsets from the bottom of the screen.
+local WIDTH, HEIGHT = 182, 80
+local HOTBAR_Y = HEIGHT - 22
+local XP_Y = HEIGHT - 29
+local HEARTS_Y = HEIGHT - 39
+local ROW = 10 -- distance between icon rows
+local BLINK_SECONDS = 0.6
 
-type Pips = { { empty: GuiObject, half: GuiObject, full: GuiObject } }
+type Pip = { holder: Frame, baseY: number, sprites: { [string]: GuiObject } }
 
 local bottom: Frame
 local hotbar: { Ui.Slot } = {}
-local hearts: Pips = {}
-local armorPips: Pips = {}
-local armorRow: Frame
+local selector: Frame
+local offhandFrame: Frame
+local offhandSlot: Ui.Slot
+local hearts: { Pip } = {}
+local absorbs: { Pip } = {}
+local armor: { Pip } = {}
+local food: { Pip } = {}
+local xpFill: Frame
+local levelLabel: TextLabel
 local itemNameLabel: TextLabel
 local actionLabel: TextLabel
 local combatLabel: TextLabel
-local sidebarLines: { [string]: TextLabel } = {}
+local attackIndicator: Frame
+local attackFill: Frame
+local sidebar: { [string]: TextLabel } = {}
 local deathFrame: Frame
 local deathMessage: TextLabel
+local deathScore: TextLabel
 local hurtFlash: Frame
 
 local actionToken = 0
 local nameToken = 0
-local statusElapsed = 0
+local slowElapsed = 0
+local shakeElapsed = 0
+local blinkUntil = 0
+local health = Config.MAX_HEALTH
 
-local function pipRow(y: number, prefix: string): (Frame, Pips)
-	local row = Ui.create("Frame", {
-		Size = UDim2.fromOffset(10 * PIP_STEP + 3, PIP),
-		Position = UDim2.fromOffset(3, y),
-		BackgroundTransparency = 1,
-		Parent = bottom,
-	})
-	local pips: Pips = {}
+-- A row of ten 9x9 icons, 8 apart. `states` maps a state name to its sprite; the first one
+-- listed is drawn at the back. With `fromRight` icon 1 is the rightmost (the hunger bar).
+local function pipRow(y: number, states: { { string } }, fromRight: boolean): { Pip }
+	local pips = {}
 	for i = 1, 10 do
-		local holder = Ui.create("Frame", {
-			Size = UDim2.fromOffset(PIP, PIP),
-			Position = UDim2.fromOffset((i - 1) * PIP_STEP, 0),
-			BackgroundTransparency = 1,
-			Parent = row,
-		})
-		local states = {}
-		for _, state in { "empty", "half", "full" } do
-			local sprite = Pixel.sprite(`{prefix}_{state}`)
-			sprite.Visible = state == "empty"
+		local x = if fromRight then WIDTH - 9 - (i - 1) * 8 else (i - 1) * 8
+		local holder = Ui.frame(bottom, x, y, 9, 9)
+		local sprites = {}
+		for _, state in states do
+			local sprite = Pixel.sprite(state[2])
+			sprite.Visible = false
 			sprite.Parent = holder
-			states[state] = sprite
+			sprites[state[1]] = sprite
 		end
-		pips[i] = states :: any
+		pips[i] = { holder = holder, baseY = y, sprites = sprites }
 	end
-	return row, pips
+	return pips
 end
 
--- `value` counts half icons: 20 fills all ten.
-local function setPips(pips: Pips, value: number)
+-- `value` counts half icons (20 fills all ten). Icons past the value show `emptyState`, or
+-- nothing when it is nil.
+local function setPips(pips: { Pip }, value: number, emptyState: string?)
 	for i, pip in pips do
 		local amount = math.clamp(value - (i - 1) * 2, 0, 2)
-		pip.empty.Visible = amount == 0
-		pip.half.Visible = amount == 1
-		pip.full.Visible = amount == 2
+		local state = if amount >= 2 then "full" elseif amount >= 1 then "half" else emptyState
+		for name, sprite in pip.sprites do
+			if name ~= "blink" then
+				sprite.Visible = name == state
+			end
+		end
+	end
+end
+
+local function moveRow(pips: { Pip }, y: number)
+	for _, pip in pips do
+		pip.baseY = y
+		pip.holder.Position = UDim2.fromOffset(pip.holder.Position.X.Offset, y)
 	end
 end
 
 function Hud.actionBar(text: string, color: Color3?)
 	actionToken += 1
 	local token = actionToken
-	actionLabel.Text = text
-	actionLabel.TextColor3 = color or Color3.fromRGB(255, 85, 85)
+	Ui.setText(actionLabel, Ui.escape(text), color or rgb(255, 85, 85))
 	task.delay(2.5, function()
 		if token == actionToken then
-			actionLabel.Text = ""
+			Ui.setText(actionLabel, "")
 		end
 	end)
 end
@@ -96,184 +117,198 @@ local function showItemName()
 	local token = nameToken
 	local stack = State.selectedStack()
 	if not stack then
-		itemNameLabel.Text = ""
+		Ui.setText(itemNameLabel, "")
 		return
 	end
-	itemNameLabel.Text = (Items.describe(stack))
-	itemNameLabel.TextColor3 = if stack.ench then Color3.fromRGB(85, 255, 255) else Color3.new(1, 1, 1)
+	local name = Items.describe(stack)
+	Ui.setText(itemNameLabel, Ui.escape(name), if stack.ench then rgb(85, 255, 255) else Color3.new(1, 1, 1))
 	task.delay(2, function()
 		if token == nameToken then
-			itemNameLabel.Text = ""
+			Ui.setText(itemNameLabel, "")
 		end
 	end)
 end
 
 local function refreshSlots()
 	for i, slot in hotbar do
-		Ui.setSlot(slot, State.slots[i])
-		local selected = i == State.selected
-		slot.stroke.Color = if selected then Color3.new(1, 1, 1) else Color3.fromRGB(120, 120, 120)
-		slot.stroke.Thickness = if selected then 5 else 3
-		slot.frame.ZIndex = if selected then 2 else 1
+		Ui.setSlot(slot, State.inv.slots[i])
 	end
-	local points = State.armorPoints()
-	armorRow.Visible = points > 0
-	setPips(armorPips, points)
+	selector.Position = UDim2.fromOffset((State.selected - 1) * 20 - 1, HOTBAR_Y - 1)
+	Ui.setSlot(offhandSlot, State.inv.offhand)
+	offhandFrame.Visible = State.inv.offhand ~= nil
+	setPips(armor, State.armorPoints(), "empty")
+	for _, pip in armor do
+		pip.holder.Visible = State.armorPoints() > 0
+	end
+end
+
+-- A hollow rectangle drawn with four strips.
+local function outline(parent: Instance, x: number, y: number, w: number, h: number, thickness: number, color: Color3): Frame
+	local box = Ui.frame(parent, x, y, w, h)
+	Ui.frame(box, 0, 0, w, thickness, color)
+	Ui.frame(box, 0, h - thickness, w, thickness, color)
+	Ui.frame(box, 0, 0, thickness, h, color)
+	Ui.frame(box, w - thickness, 0, thickness, h, color)
+	return box
 end
 
 local function buildBottom()
 	bottom = Ui.create("Frame", {
 		Name = "Bottom",
-		Size = UDim2.fromOffset(HOTBAR_WIDTH, BOTTOM_HEIGHT),
-		Position = UDim2.new(0.5, 0, 1, -8),
-		AnchorPoint = Vector2.new(0.5, 1),
+		Size = UDim2.fromOffset(WIDTH, HEIGHT),
+		Position = UDim2.new(0.5, -WIDTH / 2, 1, -HEIGHT),
 		BackgroundTransparency = 1,
 		Parent = Ui.hud,
-	}, {
-		Ui.create("UIScale", { Name = "Scale" }),
 	})
 
-	local hotbarY = BOTTOM_HEIGHT - Ui.SLOT
+	-- Hotbar: a dark translucent strip of nine 20x20 cells with grey edges.
+	Ui.frame(bottom, 0, HOTBAR_Y, WIDTH, 22, rgb(0, 0, 0), 0.45)
+	outline(bottom, 0, HOTBAR_Y, WIDTH, 22, 1, rgb(30, 30, 30))
 	for i = 1, 9 do
-		hotbar[i] = Ui.slot(bottom, UDim2.fromOffset(3 + (i - 1) * Ui.SLOT, hotbarY), "hotbar")
+		outline(bottom, 1 + (i - 1) * 20, HOTBAR_Y + 1, 20, 20, 1, rgb(125, 125, 125))
 	end
-	local heartsY = hotbarY - 9 - PIP
-	local _, heartPips = pipRow(heartsY, "heart")
-	hearts = heartPips
-	armorRow, armorPips = pipRow(heartsY - 3 - PIP, "armor")
-	armorRow.Visible = false
+	selector = outline(bottom, -1, HOTBAR_Y - 1, 24, 24, 1, rgb(30, 30, 30))
+	outline(selector, 1, 1, 22, 22, 2, rgb(225, 225, 225))
+	for i = 1, 9 do
+		hotbar[i] = Ui.bareSlot(bottom, 3 + (i - 1) * 20, HOTBAR_Y + 3)
+	end
 
-	itemNameLabel = Ui.label({
-		Size = UDim2.new(1, 0, 0, 24),
-		Position = UDim2.fromOffset(0, heartsY - 3 - PIP - 34),
-		Text = "",
-		TextSize = 22,
+	offhandFrame = Ui.frame(bottom, -29, HOTBAR_Y, 22, 22, rgb(0, 0, 0), 0.45)
+	outline(offhandFrame, 0, 0, 22, 22, 1, rgb(30, 30, 30))
+	outline(offhandFrame, 1, 1, 20, 20, 1, rgb(125, 125, 125))
+	offhandSlot = Ui.bareSlot(offhandFrame, 3, 3)
+	offhandFrame.Visible = false
+
+	-- Experience bar with the level number above it.
+	Ui.frame(bottom, 0, XP_Y, WIDTH, 5, rgb(0, 0, 0))
+	Ui.frame(bottom, 1, XP_Y + 1, WIDTH - 2, 3, rgb(42, 56, 22))
+	xpFill = Ui.frame(bottom, 1, XP_Y + 1, 0, 3, rgb(128, 255, 32))
+	levelLabel = Ui.text({
+		Size = UDim2.fromOffset(WIDTH, 8),
+		Position = UDim2.fromOffset(0, XP_Y - 6),
+		TextColor3 = rgb(128, 255, 32),
 		Parent = bottom,
 	})
-	actionLabel = Ui.label({
-		Size = UDim2.new(3, 0, 0, 24),
-		Position = UDim2.new(-1, 0, 0, heartsY - 3 - PIP - 66),
-		Text = "",
-		TextSize = 22,
-		Parent = bottom,
-	})
+
+	hearts = pipRow(HEARTS_Y, { { "empty", "heart_empty" }, { "half", "heart_half" }, { "full", "heart_full" }, { "blink", "heart_blink" } }, false)
+	absorbs = pipRow(HEARTS_Y - ROW, { { "half", "heart_absorb_half" }, { "full", "heart_absorb_full" } }, false)
+	armor = pipRow(HEARTS_Y - ROW, { { "empty", "armor_empty" }, { "half", "armor_half" }, { "full", "armor_full" } }, false)
+	food = pipRow(HEARTS_Y, { { "empty", "food_empty" }, { "half", "food_half" }, { "full", "food_full" } }, true)
+
+	itemNameLabel = Ui.text({ Size = UDim2.fromOffset(WIDTH, 8), Position = UDim2.fromOffset(0, HEIGHT - 59), Parent = bottom })
+	actionLabel = Ui.text({ Size = UDim2.fromOffset(WIDTH * 3, 8), Position = UDim2.fromOffset(-WIDTH, HEIGHT - 72), Parent = bottom })
 end
 
+-- Sidebar scoreboard on the right edge, like a Minecraft server's.
 local function buildSidebar()
-	local sidebar = Ui.create("Frame", {
+	local rows = {
+		{ "kills", "Kills" },
+		{ "deaths", "Deaths" },
+		{ "streak", "Streak" },
+		{ "level", "Level" },
+		{ "online", "Online" },
+	}
+	local width, rowHeight = 92, 9
+	local height = (#rows + 3) * rowHeight + 3
+	local frame = Ui.create("Frame", {
 		Name = "Sidebar",
-		Size = UDim2.fromOffset(250, 0),
-		AutomaticSize = Enum.AutomaticSize.Y,
-		Position = UDim2.new(1, -6, 0.5, 0),
-		AnchorPoint = Vector2.new(1, 0.5),
-		BackgroundColor3 = Color3.new(0, 0, 0),
-		BackgroundTransparency = 0.6,
+		Size = UDim2.fromOffset(width, height),
+		Position = UDim2.new(1, -width - 1, 0.5, -height / 2),
+		BackgroundColor3 = rgb(0, 0, 0),
+		BackgroundTransparency = 0.7,
 		BorderSizePixel = 0,
 		Parent = Ui.hud,
-	}, {
-		Ui.create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }),
-		Ui.create("UIPadding", { PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 6), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }),
-		Ui.create("UIScale", { Name = "Scale" }),
 	})
-	local order = 0
-	local function line(name: string, text: string, color: Color3?, centered: boolean?)
-		order += 1
-		sidebarLines[name] = Ui.label({
-			LayoutOrder = order,
-			Size = UDim2.new(1, 0, 0, 24),
-			Text = text,
-			TextSize = 18,
-			TextColor3 = color or Color3.new(1, 1, 1),
-			TextXAlignment = if centered then Enum.TextXAlignment.Center else Enum.TextXAlignment.Left,
-			Parent = sidebar,
+	Ui.frame(frame, 0, 0, width, rowHeight + 1, rgb(0, 0, 0), 0.6)
+	Ui.text({
+		Size = UDim2.fromOffset(width, 8),
+		Position = UDim2.fromOffset(0, 1),
+		Text = string.upper(Config.GAME_NAME),
+		TextColor3 = rgb(255, 170, 0),
+		Parent = frame,
+	})
+	for i, row in rows do
+		local y = 2 + i * rowHeight
+		Ui.text({
+			Size = UDim2.fromOffset(width - 4, 8),
+			Position = UDim2.fromOffset(2, y),
+			Text = row[2],
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Parent = frame,
+		})
+		sidebar[row[1]] = Ui.text({
+			Size = UDim2.fromOffset(width - 4, 8),
+			Position = UDim2.fromOffset(2, y),
+			Text = "0",
+			TextColor3 = rgb(255, 85, 85),
+			TextXAlignment = Enum.TextXAlignment.Right,
+			Parent = frame,
 		})
 	end
-	line("title", string.upper(Config.GAME_NAME), Color3.fromRGB(255, 170, 0), true)
-	line("version", Config.MC_VERSION .. " PvP", Color3.fromRGB(170, 170, 170), true)
-	line("gap1", "")
-	line("kills", "")
-	line("deaths", "")
-	line("streak", "")
-	line("gap2", "")
-	line("online", "")
-	line("zone", "")
-	line("gap3", "")
-	line("hint", "/kits  /pvp  /rtp", Color3.fromRGB(255, 255, 85), true)
+	sidebar.zone = Ui.text({
+		Size = UDim2.fromOffset(width, 8),
+		Position = UDim2.fromOffset(0, 2 + (#rows + 1) * rowHeight),
+		Parent = frame,
+	})
+	sidebar.safety = Ui.text({
+		Size = UDim2.fromOffset(width, 8),
+		Position = UDim2.fromOffset(0, 2 + (#rows + 2) * rowHeight),
+		Parent = frame,
+	})
 end
 
 local function buildOverlay()
-	-- Crosshair.
-	for _, size in { UDim2.fromOffset(20, 2), UDim2.fromOffset(2, 20) } do
-		Ui.create("Frame", {
-			Size = size,
-			Position = UDim2.fromScale(0.5, 0.5),
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			BackgroundColor3 = Color3.new(1, 1, 1),
-			BackgroundTransparency = 0.15,
-			BorderSizePixel = 0,
-			Parent = Ui.overlay,
-		})
-	end
+	-- Crosshair: a thin white plus.
+	Ui.create("Frame", { Size = UDim2.fromOffset(9, 1), Position = UDim2.new(0.5, -4, 0.5, 0), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = Ui.overlay })
+	Ui.create("Frame", { Size = UDim2.fromOffset(1, 9), Position = UDim2.new(0.5, 0, 0.5, -4), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = Ui.overlay })
+
+	-- Attack indicator under the crosshair: fills from the left as the weapon recharges.
+	attackIndicator = Ui.create("Frame", {
+		Size = UDim2.fromOffset(16, 4),
+		Position = UDim2.new(0.5, -8, 0.5, 9),
+		BackgroundTransparency = 1,
+		Visible = false,
+		Parent = Ui.overlay,
+	})
+	local background = Pixel.sprite("attack_indicator_bg")
+	background.Parent = attackIndicator
+	attackFill = Ui.create("Frame", { Size = UDim2.fromOffset(0, 4), BackgroundTransparency = 1, ClipsDescendants = true, Parent = attackIndicator })
+	local fill = Pixel.sprite("attack_indicator_fill")
+	fill.Size = UDim2.fromOffset(16, 4)
+	fill.Parent = attackFill
 
 	hurtFlash = Ui.create("Frame", {
 		Size = UDim2.fromScale(1, 1),
-		BackgroundColor3 = Color3.fromRGB(200, 0, 0),
+		BackgroundColor3 = rgb(200, 0, 0),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		Parent = Ui.overlay,
 	})
 
-	combatLabel = Ui.label({
-		Size = UDim2.new(1, 0, 0, 28),
-		Position = UDim2.fromOffset(0, 48),
-		Text = "",
-		TextSize = 22,
-		TextColor3 = Color3.fromRGB(255, 85, 85),
+	combatLabel = Ui.text({
+		Size = UDim2.new(1, 0, 0, 8),
+		Position = UDim2.fromOffset(0, 16),
+		TextColor3 = rgb(255, 85, 85),
 		Visible = false,
 		Parent = Ui.hud,
 	})
 
+	-- Death screen: red wash, big title, the death message, score and a Respawn button.
 	deathFrame = Ui.create("Frame", {
 		Size = UDim2.fromScale(1, 1),
-		BackgroundColor3 = Color3.fromRGB(120, 0, 0),
+		BackgroundColor3 = rgb(110, 0, 0),
 		BackgroundTransparency = 0.45,
 		BorderSizePixel = 0,
 		Visible = false,
-		ZIndex = 30,
+		ZIndex = 20,
 		Parent = Ui.overlay,
 	})
-	Ui.label({
-		Size = UDim2.new(1, 0, 0, 64),
-		Position = UDim2.fromScale(0, 0.28),
-		Text = "You Died!",
-		TextSize = 60,
-		ZIndex = 31,
-		Parent = deathFrame,
-	})
-	deathMessage = Ui.label({
-		Size = UDim2.new(1, 0, 0, 26),
-		Position = UDim2.fromScale(0, 0.41),
-		Text = "",
-		TextSize = 22,
-		ZIndex = 31,
-		Parent = deathFrame,
-	})
-	local respawn = Ui.create("TextButton", {
-		Size = UDim2.fromOffset(360, 48),
-		Position = UDim2.fromScale(0.5, 0.52),
-		AnchorPoint = Vector2.new(0.5, 0),
-		BackgroundColor3 = Color3.fromRGB(112, 112, 112),
-		BorderSizePixel = 0,
-		Font = Ui.FONT,
-		Text = "Respawn",
-		TextSize = 22,
-		TextColor3 = Color3.new(1, 1, 1),
-		Modal = true,
-		ZIndex = 31,
-		Parent = deathFrame,
-	}, {
-		Ui.create("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }),
-	})
+	Ui.text({ Size = UDim2.new(1, 0, 0, 16), Position = UDim2.new(0, 0, 0.25, 0), Text = "You Died!", TextSize = 16, Parent = deathFrame })
+	deathMessage = Ui.text({ Size = UDim2.new(1, 0, 0, 8), Position = UDim2.new(0, 0, 0.25, 26), Parent = deathFrame })
+	deathScore = Ui.text({ Size = UDim2.new(1, 0, 0, 8), Position = UDim2.new(0, 0, 0.25, 40), Parent = deathFrame })
+	local holder = Ui.create("Frame", { Size = UDim2.fromOffset(200, 20), Position = UDim2.new(0.5, -100, 0.25, 62), BackgroundTransparency = 1, Parent = deathFrame })
+	local respawn = Ui.button(holder, 0, 0, 200, 20, "Respawn")
+	respawn.Modal = true -- frees the mouse while the camera is locked in first person
 	respawn.MouseButton1Click:Connect(function()
 		Sounds.playLocal("click", 0.4)
 		Remotes.Respawn:FireServer()
@@ -284,51 +319,83 @@ local function watchCharacter(character: Model)
 	State.dead = false
 	deathFrame.Visible = false
 	local humanoid = character:WaitForChild("Humanoid") :: Humanoid
-	local last = humanoid.Health
-	setPips(hearts, math.ceil(last))
-	humanoid.HealthChanged:Connect(function(health)
-		if health < last - 0.01 then
-			hurtFlash.BackgroundTransparency = 0.7
+	health = humanoid.Health
+	humanoid.HealthChanged:Connect(function(value)
+		if value < health - 0.01 then
+			blinkUntil = os.clock() + BLINK_SECONDS
+			hurtFlash.BackgroundTransparency = 0.75
 			TweenService:Create(hurtFlash, TweenInfo.new(0.35), { BackgroundTransparency = 1 }):Play()
 		end
-		last = health
-		setPips(hearts, math.ceil(health))
+		health = value
 	end)
+end
+
+-- Hearts flash a white outline after damage and jitter when health is low.
+local function animateHearts(dt: number)
+	local now = os.clock()
+	local blink = now < blinkUntil and math.floor((blinkUntil - now) / 0.1) % 2 == 1
+	shakeElapsed += dt
+	local shake = shakeElapsed >= 0.05
+	if shake then
+		shakeElapsed = 0
+	end
+	local low = math.ceil(health) <= 4
+	for _, pip in hearts do
+		pip.sprites.blink.Visible = blink
+		if shake then
+			local offset = if low then math.random(-1, 1) else 0
+			pip.holder.Position = UDim2.fromOffset(pip.holder.Position.X.Offset, pip.baseY + offset)
+		end
+	end
+end
+
+local function attribute(name: string, default: number): number
+	local value = player:GetAttribute(name)
+	return if type(value) == "number" then value else default
 end
 
 -- Called every frame; the slower text updates run a few times a second.
 function Hud.update(dt: number)
-	Ui.updateTooltip()
-	statusElapsed += dt
-	if statusElapsed < 0.2 then
+	local charge = State.charge()
+	attackIndicator.Visible = charge < 1 and State.menu == nil and not State.dead
+	attackFill.Size = UDim2.fromOffset(math.floor(charge * 16), 4)
+	animateHearts(dt)
+
+	slowElapsed += dt
+	if slowElapsed < 0.1 then
 		return
 	end
-	statusElapsed = 0
+	slowElapsed = 0
 
-	local scale = Ui.scale()
-	for _, name in { "Bottom", "Sidebar" } do
-		local frame = Ui.hud:FindFirstChild(name)
-		if frame then
-			frame.Scale.Scale = scale
-		end
-	end
+	setPips(hearts, math.ceil(health), "empty")
+	setPips(food, attribute("Food", 20), "empty")
 
-	local remaining = (player:GetAttribute("CombatUntil") or 0) - workspace:GetServerTimeNow()
+	-- Absorption hearts get their own row above the health; armor moves up to make room.
+	local absorption = math.ceil(attribute("Absorption", 0))
+	setPips(absorbs, absorption, nil)
+	moveRow(armor, if absorption > 0 then HEARTS_Y - 2 * ROW else HEARTS_Y - ROW)
+
+	local level, progress = Xp.level(attribute("Xp", 0))
+	xpFill.Size = UDim2.fromOffset(math.floor((WIDTH - 2) * progress), 3)
+	Ui.setText(levelLabel, if level > 0 then tostring(level) else "")
+
+	local remaining = attribute("CombatUntil", 0) - workspace:GetServerTimeNow()
 	combatLabel.Visible = remaining > 0
 	if remaining > 0 then
-		combatLabel.Text = `IN COMBAT - {math.ceil(remaining)}s - logging out drops your items!`
+		Ui.setText(combatLabel, `In combat {math.ceil(remaining)}s - logging out drops your items`)
 	end
 
-	sidebarLines.kills.Text = `Kills: {player:GetAttribute("Kills") or 0}`
-	sidebarLines.deaths.Text = `Deaths: {player:GetAttribute("Deaths") or 0}`
-	sidebarLines.streak.Text = `Streak: {player:GetAttribute("Streak") or 0}`
-	sidebarLines.online.Text = `Online: {#Players:GetPlayers()}`
+	Ui.setText(sidebar.kills, tostring(attribute("Kills", 0)))
+	Ui.setText(sidebar.deaths, tostring(attribute("Deaths", 0)))
+	Ui.setText(sidebar.streak, tostring(attribute("Streak", 0)))
+	Ui.setText(sidebar.level, tostring(level))
+	Ui.setText(sidebar.online, tostring(#Players:GetPlayers()))
 	local character = player.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if root then
 		local pvp = Zones.pvpAllowedAt(root.Position)
-		sidebarLines.zone.Text = Zones.DISPLAY[Zones.zoneAt(root.Position)] .. if pvp then " - PvP" else " - Safe"
-		sidebarLines.zone.TextColor3 = if pvp then Color3.fromRGB(255, 85, 85) else Color3.fromRGB(85, 255, 85)
+		Ui.setText(sidebar.zone, Zones.DISPLAY[Zones.zoneAt(root.Position)], rgb(255, 255, 85))
+		Ui.setText(sidebar.safety, if pvp then "PvP on" else "Safe", if pvp then rgb(255, 85, 85) else rgb(85, 255, 85))
 	end
 end
 
@@ -342,10 +409,11 @@ function Hud.init()
 		refreshSlots()
 		showItemName()
 	end)
-	Remotes.Died.OnClientEvent:Connect(function(message: string)
+	Remotes.Died.OnClientEvent:Connect(function(message: string, score: number?)
 		State.dead = true
 		State.closeMenu()
-		deathMessage.Text = message
+		Ui.setText(deathMessage, Ui.escape(message))
+		Ui.setText(deathScore, `Score: {Ui.colored(tostring(score or 0), "#FFFF55")}`)
 		deathFrame.Visible = true
 	end)
 
@@ -354,7 +422,6 @@ function Hud.init()
 	end
 	player.CharacterAdded:Connect(watchCharacter)
 	refreshSlots()
-	setPips(hearts, Config.MAX_HEALTH)
 end
 
 return Hud

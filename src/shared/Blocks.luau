@@ -56,6 +56,7 @@ local list: { any } = {
 	{ key = "deepslate_bricks", name = "Deepslate Bricks", color = rgb(70, 70, 73), hardness = 3.5, tex = { all = "deepslate_bricks" } },
 	{ key = "red_concrete", name = "Red Concrete", color = rgb(142, 32, 32), hardness = 1.8, tex = { all = "red_concrete" } },
 	{ key = "white_concrete", name = "White Concrete", color = rgb(207, 213, 214), hardness = 1.8, tex = { all = "white_concrete" } },
+	{ key = "birch_planks", name = "Birch Planks", color = rgb(196, 179, 123), hardness = 2, tex = { all = "birch_planks" } },
 }
 
 Blocks.list = list :: { BlockDef }

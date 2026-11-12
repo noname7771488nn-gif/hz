@@ -144,17 +144,24 @@ function Pixel.setIcon(holder: GuiObject, itemKey: string?, enchanted: boolean?)
 			image.Size = UDim2.fromScale(1, 1)
 			icon = image
 		else
-			local square = Instance.new("Frame")
-			square.BackgroundColor3 = blockDef.color
-			square.BorderSizePixel = 0
-			square.AnchorPoint = Vector2.new(0.5, 0.5)
-			square.Position = UDim2.fromScale(0.5, 0.5)
-			square.Size = UDim2.fromScale(0.75, 0.75)
-			local stroke = Instance.new("UIStroke")
-			stroke.Color = blockDef.color:Lerp(Color3.new(0, 0, 0), 0.45)
-			stroke.Thickness = 2
-			stroke.Parent = square
-			icon = square
+			-- No image available: a simple three-tone cube in the block's colour.
+			local cube = Instance.new("Frame")
+			cube.BackgroundTransparency = 1
+			cube.Size = UDim2.fromScale(1, 1)
+			local faces = {
+				{ 2, 2, 12, 5, blockDef.color:Lerp(Color3.new(1, 1, 1), 0.25) },
+				{ 2, 7, 6, 7, blockDef.color:Lerp(Color3.new(0, 0, 0), 0.15) },
+				{ 8, 7, 6, 7, blockDef.color:Lerp(Color3.new(0, 0, 0), 0.4) },
+			}
+			for _, face in faces :: { any } do
+				local frame = Instance.new("Frame")
+				frame.BorderSizePixel = 0
+				frame.BackgroundColor3 = face[5]
+				frame.Position = UDim2.fromScale(face[1] / 16, face[2] / 16)
+				frame.Size = UDim2.fromScale(face[3] / 16, face[4] / 16)
+				frame.Parent = cube
+			end
+			icon = cube
 		end
 	else
 		icon = Pixel.sprite(itemKey)

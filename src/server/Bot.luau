@@ -448,6 +448,7 @@ local function onDeath(_: Combat.Entity, killer: Combat.Entity?)
 	end
 	if killer and killer.player then
 		Messages.broadcast(`{killer.name} defeated the {SETTINGS.name}!`, "streak")
+		Combat.addXp(killer.player, 30)
 	end
 	task.delay(1.2, function()
 		if body then

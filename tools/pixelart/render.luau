@@ -2,7 +2,9 @@
 -- Contact sheet of every PixelArt texture as a plain-text PPM (P3) on stdout.
 -- Usage (from the repo root):
 --   luau tools/pixelart/render.luau -a [all|blocks|sprites] [scale] [firstBlock] [lastBlock] > sheet.ppm
+--   luau tools/pixelart/render.luau -a keys [scale] key1,key2,... > sheet.ppm
 --   python3 tools/pixelart/ppm2png.py sheet.ppm sheet.png
+-- In keys mode block faces are tiled 3x3 and sprites (any size) are drawn once.
 
 local PixelArt = require("../../src/shared/PixelArt")
 
@@ -34,7 +36,16 @@ local ICON_PAIRS = {
 type Cell = { image: Image, tiles: number, zoom: number }
 local sections: { { Cell } } = {}
 
-if mode ~= "sprites" then
+if mode == "keys" then
+	local cells: { Cell } = {}
+	for key in string.gmatch(args[3] or "", "[^,]+") do
+		local image = PixelArt.get(key)
+		assert(image, "unknown key " .. key)
+		local isBlock = table.find(PixelArt.BLOCK_KEYS, key) ~= nil
+		table.insert(cells, { image = image, tiles = if isBlock then 3 else 1, zoom = scale })
+	end
+	table.insert(sections, cells)
+elseif mode ~= "sprites" then
 	local cells: { Cell } = {}
 	for index = firstBlock, lastBlock do
 		local image = PixelArt.get(PixelArt.BLOCK_KEYS[index])
@@ -44,7 +55,7 @@ if mode ~= "sprites" then
 	table.insert(sections, cells)
 end
 
-if mode ~= "blocks" then
+if mode ~= "blocks" and mode ~= "keys" then
 	local icons: { Cell } = {}
 	for _, pair in ICON_PAIRS do
 		table.insert(icons, { image = PixelArt.blockIcon(pair[1], pair[2]), tiles = 1, zoom = scale })

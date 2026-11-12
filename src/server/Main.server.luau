@@ -13,6 +13,7 @@ local Data = require(Server.Data)
 local Inventory = require(Server.Inventory)
 local Drops = require(Server.Drops)
 local Combat = require(Server.Combat)
+local Survival = require(Server.Survival)
 local Building = require(Server.Building)
 local Commands = require(Server.Commands)
 local Kits = require(Server.Kits)
@@ -29,6 +30,7 @@ Structures.buildDecor()
 Structures.buildArena()
 
 Combat.init()
+Survival.init()
 Building.init()
 Commands.init()
 Kits.init()
@@ -41,35 +43,31 @@ end)
 -- Inventory remotes --------------------------------------------------------------------------------
 
 Remotes.SelectSlot.OnServerEvent:Connect(function(player, index)
-	if RateLimit.allow(player, "select", 30) and type(index) == "number" then
-		Inventory.select(player, index)
+	if RateLimit.allow(player, "select", 30) and Inventory.select(player, index) then
+		-- Switching items restarts the attack cooldown.
+		Combat.resetCooldown(player)
 	end
 end)
 
-Remotes.MoveSlot.OnServerEvent:Connect(function(player, from, to)
-	if RateLimit.allow(player, "move", 20) then
-		Inventory.move(player, from, to)
-	end
-end)
-
-Remotes.QuickMove.OnServerEvent:Connect(function(player, ref)
-	if RateLimit.allow(player, "quickMove", 20) then
-		Inventory.quickMove(player, ref)
-	end
-end)
-
-Remotes.DropItem.OnServerEvent:Connect(function(player, wholeStack)
-	if not RateLimit.allow(player, "drop", 10) then
+Remotes.InvAction.OnServerEvent:Connect(function(player, seq, action, a, b, c)
+	if type(action) ~= "string" or not RateLimit.allow(player, "inventory", 40) then
+		Inventory.reject(player, seq)
 		return
 	end
+	local drops = Inventory.action(player, seq, action, a, b, c)
+	if #drops == 0 then
+		return
+	end
+	-- Thrown items fly out in front of the player.
 	local root = Combat.rootOf(player)
-	if not root then
+	local entity = Combat.ofPlayer(player)
+	local origin = if root then root.Position else entity and entity.lastPosition
+	if not origin then
 		return
 	end
-	local stack = Inventory.takeSelected(player, if wholeStack == true then 64 else 1)
-	if stack then
-		local look = root.CFrame.LookVector
-		Drops.spawn(stack, root.Position + look * 2 + Vector3.new(0, 1, 0), look * 14 + Vector3.new(0, 8, 0), 2)
+	local look = if root then root.CFrame.LookVector else Vector3.zAxis
+	for _, stack in drops do
+		Drops.spawn(stack, origin + look * 2 + Vector3.new(0, 1, 0), look * 14 + Vector3.new(0, 8, 0), 2)
 	end
 end)
 
@@ -83,6 +81,7 @@ local function onCharacterAdded(player: Player, character: Model)
 	local toArena = Config.RESPAWN_AT_PVP_WARP and entity.respawnAtArena
 	entity.respawnAtArena = false
 	Combat.bind(entity, character)
+	Survival.reset(player)
 	Visuals.blockify(character)
 	Visuals.nameTag(character, player.Name)
 	Visuals.refresh(player, true)
@@ -111,6 +110,7 @@ local function onPlayerAdded(player: Player)
 	Combat.addPlayer(player)
 	player:SetAttribute("Kills", profile.kills)
 	player:SetAttribute("Deaths", profile.deaths)
+	player:SetAttribute("Xp", profile.xp)
 	player:SetAttribute("Streak", 0)
 
 	player.CharacterAdded:Connect(function(character)
@@ -142,6 +142,7 @@ Players.PlayerRemoving:Connect(function(player)
 	Combat.handleLeave(player)
 	Data.save(player, Inventory.serialize(player))
 	Inventory.release(player)
+	Survival.remove(player)
 	Visuals.release(player)
 	Data.release(player)
 	RateLimit.clear(player)
