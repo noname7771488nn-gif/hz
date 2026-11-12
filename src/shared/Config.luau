@@ -2,7 +2,7 @@
 local Config = {}
 
 Config.GAME_NAME = "BlockCraft"
-Config.MC_VERSION = "1.21.1" -- combat rules (attack cooldown, crits, armor, enchantments) follow this version
+Config.MC_VERSION = "1.21.1" -- uses the combat system introduced in 1.9: attack cooldown, sweeps, crits
 
 -- World ------------------------------------------------------------------------------------------
 Config.BLOCK_SIZE = 3 -- studs per block
@@ -44,9 +44,11 @@ Config.ATTACK_REACH = 3 -- blocks
 Config.WALK_SPEED = 13 -- 4.3 blocks/s
 Config.SPRINT_SPEED = 17 -- 5.6 blocks/s
 Config.SNEAK_SPEED = 4
-Config.KNOCKBACK_HORIZONTAL = 16
-Config.KNOCKBACK_SPRINT_BONUS = 14 -- extra horizontal knockback for a fully charged sprint hit
-Config.KNOCKBACK_VERTICAL = 20
+Config.KNOCKBACK_HORIZONTAL = 18
+Config.KNOCKBACK_SPRINT_BONUS = 18 -- extra horizontal knockback for a fully charged sprint hit
+Config.KNOCKBACK_VERTICAL = 22
+Config.EAT_SECONDS = 1.6 -- time to eat one item
+Config.SPRINT_MIN_FOOD = 7 -- sprinting needs more than three hunger icons
 Config.ITEM_DESPAWN = 300 -- dropped items vanish after 5 minutes
 Config.DAY_LENGTH = 1200 -- seconds for a full day/night cycle (20 minutes)
 
@@ -64,6 +66,7 @@ Config.Kits = {
 			{ id = "iron_leggings", count = 1 },
 			{ id = "iron_boots", count = 1 },
 			{ id = "iron_sword", count = 1 },
+			{ id = "cooked_beef", count = 16 },
 			{ id = "oak_planks", count = 32 },
 		},
 	},
@@ -77,6 +80,8 @@ Config.Kits = {
 			{ id = "diamond_leggings", count = 1, ench = { protection = 3 } },
 			{ id = "diamond_boots", count = 1, ench = { protection = 3 } },
 			{ id = "diamond_sword", count = 1, ench = { sharpness = 4, fire_aspect = 1 } },
+			{ id = "golden_apple", count = 2 },
+			{ id = "cooked_beef", count = 16 },
 		},
 	},
 	builder = {
@@ -88,6 +93,7 @@ Config.Kits = {
 			{ id = "cobblestone", count = 64 },
 			{ id = "stone_bricks", count = 32 },
 			{ id = "glowstone", count = 16 },
+			{ id = "cooked_beef", count = 8 },
 		},
 	},
 }
@@ -118,13 +124,20 @@ Config.Textures = {} :: { [string]: string }
 Config.Sounds = {
 	blockBreak = "rbxasset://sounds/action_jump_land.mp3",
 	blockPlace = "rbxasset://sounds/action_jump_land.mp3",
-	hit = "rbxasset://sounds/swordslash.wav",
 	hurt = "rbxasset://sounds/uuhhh.mp3",
 	swing = "rbxasset://sounds/swordlunge.wav",
 	pickup = "rbxasset://sounds/electronicpingshort.wav",
 	equip = "rbxasset://sounds/unsheath.wav",
 	click = "rbxasset://sounds/clickfast.wav",
 	kit = "rbxasset://sounds/electronicpingshort.wav",
-}
+	-- One per kind of hit, as in Minecraft's combat.
+	attackStrong = { id = "rbxasset://sounds/swordslash.wav", pitch = 1 },
+	attackWeak = { id = "rbxasset://sounds/swordlunge.wav", pitch = 1.5, volume = 0.3 },
+	attackCrit = { id = "rbxasset://sounds/swordslash.wav", pitch = 1.35, volume = 0.8 },
+	attackSweep = { id = "rbxasset://sounds/swordlunge.wav", pitch = 0.8, volume = 0.7 },
+	attackKnockback = { id = "rbxasset://sounds/swordslash.wav", pitch = 0.75, volume = 0.7 },
+	eat = { id = "rbxasset://sounds/action_jump_land.mp3", pitch = 2, volume = 0.4 },
+	burp = { id = "rbxasset://sounds/uuhhh.mp3", pitch = 0.6, volume = 0.4 },
+} :: { [string]: any }
 
 return Config
