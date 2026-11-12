@@ -147,13 +147,38 @@ blocks.grass_side = function(x, y)
 	return grass(x, y)
 end
 
-local STONE = { rgb(102, 102, 102), rgb(115, 115, 115), rgb(127, 127, 127), rgb(137, 137, 137), rgb(147, 147, 147) }
-local STONE_CUTS = { 0.3, 0.43, 0.6, 0.72 }
+local STONE = { rgb(104, 104, 104), rgb(116, 116, 116), rgb(127, 127, 127), rgb(136, 136, 136), rgb(145, 145, 145) }
+-- Hand-placed soft streaks on a flat mid grey: D/d darker, l/L lighter.
+local STONE_LAYOUT = {
+	"llll......ddddd.",
+	"lLLLll.....ddd..",
+	".llll...........",
+	".....ddddd...lll",
+	"l.....ddd...lLLL",
+	"Ll.............l",
+	"...lllll...dd...",
+	"..lLLLLll.dddd..",
+	"...llll...dDd...",
+	"dd.............d",
+	"Ddd....lll....dd",
+	"d.....lLLll.....",
+	"......llll..ddd.",
+	"..dddd.....dDDd.",
+	"...dDdd.....dd..",
+	"................",
+}
+local STONE_SHADES = { D = 1, d = 2, l = 4, L = 5 }
 
 local function stone(x: number, y: number): number
-	-- Wide, short blobs plus 4px dashes give the horizontal streaks that read as stone.
-	local dash = (x + math.floor(rnd(0, y, 123) * SIZE)) % SIZE // 4
-	return pick(STONE, STONE_CUTS, vnoise(x, y, 4, 2, 121) * 0.5 + rnd(dash, y, 124) * 0.28 + rnd(x, y, 122) * 0.22)
+	local index = STONE_SHADES[string.sub(STONE_LAYOUT[y + 1], x + 1, x + 1)] or 3
+	-- A little grit keeps the flat areas from looking like plastic.
+	local grit = rnd(x, y, 122)
+	if grit < 0.05 then
+		index -= 1
+	elseif grit > 0.95 then
+		index += 1
+	end
+	return clampIndex(STONE, index)
 end
 blocks.stone = stone
 
@@ -364,31 +389,40 @@ local PLANKS = { rgb(96, 74, 42), rgb(120, 94, 54), rgb(146, 117, 68), rgb(162, 
 -- Column of the butt joint in each of the four boards.
 local PLANK_JOINTS = { 6, 13, 2, 9 }
 
-blocks.oak_planks = function(x, y)
-	local board, row = y // 4, y % 4
-	local joint = PLANK_JOINTS[board + 1]
-	if row == 3 then
-		return if rnd(x, y, 201) < 0.3 then PLANKS[1] else PLANKS[2] -- seam between boards
-	elseif x == joint then
-		return PLANKS[2]
+-- Palette: 2 seam shades then 4 board shades, dark to light.
+local function planks(palette: { number }, seed: number): Painter
+	return function(x, y)
+		local board, row = y // 4, y % 4
+		local joint = PLANK_JOINTS[board + 1]
+		if row == 3 then
+			return if rnd(x, y, seed) < 0.3 then palette[1] else palette[2] -- seam between boards
+		elseif x == joint then
+			return palette[2]
+		end
+		-- Grain runs along the board in short streaks that restart after the joint.
+		local streak = (x - joint - 1) % SIZE // 5
+		local grain = rnd(streak + board * 4, row, seed + 1)
+		local index = 4
+		if row == 0 then
+			index += 1
+		end
+		if grain < 0.3 then
+			index -= 1
+		elseif grain > 0.78 then
+			index += 1
+		end
+		if rnd(x, y, seed + 2) < 0.1 then
+			index -= 1
+		end
+		return palette[math.clamp(index, 3, 6)]
 	end
-	-- Grain runs along the board in short streaks that restart after the joint.
-	local streak = (x - joint - 1) % SIZE // 5
-	local grain = rnd(streak + board * 4, row, 202)
-	local index = 4
-	if row == 0 then
-		index += 1
-	end
-	if grain < 0.3 then
-		index -= 1
-	elseif grain > 0.78 then
-		index += 1
-	end
-	if rnd(x, y, 203) < 0.1 then
-		index -= 1
-	end
-	return PLANKS[math.clamp(index, 3, 6)]
 end
+
+blocks.oak_planks = planks(PLANKS, 201)
+blocks.birch_planks = planks(
+	{ rgb(150, 132, 84), rgb(172, 154, 102), rgb(196, 180, 124), rgb(208, 193, 137), rgb(218, 205, 150), rgb(229, 217, 165) },
+	205
+)
 
 -- Running-bond bricks. Palette: mortar, shadow edge, 3 body shades, highlight edge.
 local function bricks(palette: { number }, width: number, height: number, seed: number): Painter
@@ -486,13 +520,29 @@ blocks.coal_ore = ore({ rgb(74, 74, 74), rgb(42, 42, 42), rgb(20, 20, 20) }, 0)
 blocks.iron_ore = ore({ rgb(238, 208, 186), rgb(216, 175, 147), rgb(172, 124, 94) }, 1)
 blocks.diamond_ore = ore({ rgb(204, 255, 250), rgb(92, 232, 222), rgb(30, 164, 160) }, 2)
 
--- Glowstone reuses the cobble layout turned on its side, as chunky crystals.
-blocks.glowstone = lumps(function(x, y)
-	return cobbleStone(y + 5, SIZE - 1 - x)
-end, {
-	{ rgb(214, 160, 74), rgb(246, 208, 104), rgb(255, 230, 138), rgb(255, 250, 206) },
-	{ rgb(202, 148, 66), rgb(240, 198, 96), rgb(252, 222, 128), rgb(255, 244, 186) },
-}, { rgb(124, 84, 42), rgb(160, 112, 54) }, 231)
+-- Glowstone crystal shades from amber to pale cream, plus the hot core colour.
+local GLOWSTONE = { rgb(226, 162, 62), rgb(246, 200, 84), rgb(255, 224, 118), rgb(255, 240, 168) }
+local GLOWSTONE_HOT = rgb(255, 253, 228)
+
+blocks.glowstone = function(x, y)
+	-- Angular voronoi shards with orange-brown cracks along the seams.
+	local id, gap, dx, dy, distance = voronoi(x, y, 3, 231)
+	if gap < 0.6 then
+		return if rnd(x, y, 232) < 0.45 then rgb(132, 82, 36) else rgb(172, 110, 44)
+	end
+	local tone = rnd(id, 0, 233)
+	if tone > 0.6 and distance < 1.5 then
+		return GLOWSTONE_HOT
+	end
+	local index = 2 + math.floor(tone * 3)
+	-- Each shard is faceted: lit towards the top-left, shaded at the bottom-right.
+	if dx + dy > 2.4 then
+		index -= 1
+	elseif dx + dy < -2.4 then
+		index += 1
+	end
+	return clampIndex(GLOWSTONE, index)
+end
 
 local OBSIDIAN = { rgb(9, 7, 16), rgb(19, 15, 31), rgb(30, 23, 47), rgb(46, 36, 68), rgb(70, 56, 98) }
 
@@ -749,12 +799,75 @@ sprite("diamond", {
 	"................",
 }, { o = DIAMOND.o, l = DIAMOND.l, w = rgb(255, 255, 255), b = DIAMOND.b, d = DIAMOND.d })
 
+-- f fat rim, g grill marks.
+sprite("cooked_beef", {
+	"................",
+	"................",
+	"........ooooo...",
+	"......oobbbbbo..",
+	"....oofbbbbbbbo.",
+	"...offbbbbgbbgbo",
+	"..offbblbgbbgbbo",
+	"..ofbblbgbbgbbbo",
+	".offblbgbbgbbgbo",
+	".ofbbbgbbgbbgbdo",
+	".ofbbgbbgbbgbbdo",
+	".offbbbgbbgbbddo",
+	"..offbbbbgbbddo.",
+	"...oofbbbbdddo..",
+	".....oooooooo...",
+	"................",
+}, {
+	o = rgb(58, 30, 16), f = rgb(226, 196, 154), b = rgb(150, 86, 46), l = rgb(184, 116, 66),
+	g = rgb(92, 48, 24), d = rgb(118, 64, 34),
+})
+
+sprite("golden_apple", {
+	"................",
+	"........o..oo...",
+	"........o.oggo..",
+	"...ooo..oogggo..",
+	"..oyyyoooooooo..",
+	".oyllyyoyyyyydo.",
+	".oywwyyyyyyyydo.",
+	".oywyyyyyyyyydo.",
+	".oylyyyyyyyyydo.",
+	".oyyyyyyyyyyydo.",
+	".oyyyyyyyyyyddo.",
+	".oyyyyyyyyydddo.",
+	"..oyyyyyyydddo..",
+	"...odyyyddddo...",
+	"....oooooooo....",
+	"................",
+}, {
+	o = rgb(112, 72, 14), y = rgb(248, 206, 50), l = rgb(255, 234, 122), w = rgb(255, 255, 255),
+	d = rgb(214, 156, 26), g = rgb(74, 168, 52),
+})
+
 -- Empty-slot placeholders: each armor piece's fill (without its outline) in one flat grey.
 local SLOT_GREY: Palette = { l = rgb(100, 100, 100), b = rgb(100, 100, 100), d = rgb(100, 100, 100) }
 sprite("slot_head", HELMET, SLOT_GREY)
 sprite("slot_chest", CHESTPLATE, SLOT_GREY)
 sprite("slot_legs", LEGGINGS, SLOT_GREY)
 sprite("slot_feet", BOOTS, SLOT_GREY)
+sprite("slot_offhand", {
+	"................",
+	"..bbbbbbbbbbbb..",
+	"..b..........b..",
+	"..b.bbbbbbbb.b..",
+	"..b.bbbbbbbb.b..",
+	"..b.bbbbbbbb.b..",
+	"..b.bbbbbbbb.b..",
+	"..b.bbbbbbbb.b..",
+	"..b.bbbbbbbb.b..",
+	"..bb.bbbbbb.bb..",
+	"...b.bbbbbb.b...",
+	"...bb.bbbb.bb...",
+	"....bb.bb.bb....",
+	".....bb..bb.....",
+	"......bbbb......",
+	"................",
+}, SLOT_GREY)
 
 local HEART = {
 	".kk...kk.",
@@ -780,9 +893,21 @@ local ARMOR = {
 	"...kkk...",
 }
 
--- Full / half / empty HUD icons from one drawing: columns from emptyFrom
--- onwards keep their outline but show the dark empty container instead.
-local function hudIcon(key: string, rows: { string }, palette: Palette, emptyFrom: number)
+local FOOD = {
+	"..kkkk...",
+	".kmmmmk..",
+	"kmlmmmmk.",
+	"kmlmmmmk.",
+	"kmmmmmdk.",
+	"kmmmmddkk",
+	".kdddkwwk",
+	"..kkkkwsk",
+	"......kk.",
+}
+
+-- Full / half / empty HUD icons from one drawing: columns emptyFrom..emptyTo
+-- (default: to the right edge) keep their outline but show the dark empty container.
+local function hudIcon(key: string, rows: { string }, palette: Palette, emptyFrom: number, emptyTo: number?)
 	sprites[key] = function()
 		local empty = table.clone(palette)
 		for char in palette do
@@ -792,7 +917,7 @@ local function hudIcon(key: string, rows: { string }, palette: Palette, emptyFro
 		end
 		local image = drawSprite(rows, palette)
 		local hollow = drawSprite(rows, empty)
-		for x = emptyFrom, image.width - 1 do
+		for x = emptyFrom, emptyTo or image.width - 1 do
 			for y = 0, image.height - 1 do
 				local offset = (y * image.width + x) * 4
 				buffer.writeu32(image.pixels, offset, buffer.readu32(hollow.pixels, offset))
@@ -815,6 +940,89 @@ hudIcon("heart_empty", HEART, HEART_PALETTE, 0)
 hudIcon("armor_full", ARMOR, ARMOR_PALETTE, 9)
 hudIcon("armor_half", ARMOR, ARMOR_PALETTE, 5)
 hudIcon("armor_empty", ARMOR, ARMOR_PALETTE, 0)
+
+-- Absorption hearts: the same drawing in gold.
+local ABSORB_PALETTE: Palette = {
+	k = HEART_PALETTE.k, r = rgb(250, 204, 40), d = rgb(198, 142, 16), w = rgb(255, 255, 255), e = HEART_PALETTE.e,
+}
+hudIcon("heart_absorb_full", HEART, ABSORB_PALETTE, 9)
+hudIcon("heart_absorb_half", HEART, ABSORB_PALETTE, 5)
+-- White container outline, overlaid on a heart to flash it on damage.
+sprite("heart_blink", HEART, { k = rgb(255, 255, 255) })
+
+local FOOD_PALETTE: Palette = {
+	k = rgb(0, 0, 0), m = rgb(166, 98, 46), l = rgb(210, 146, 82), d = rgb(118, 64, 28), w = rgb(236, 230, 212),
+	s = rgb(196, 186, 162), e = rgb(50, 42, 38),
+}
+hudIcon("food_full", FOOD, FOOD_PALETTE, 9)
+-- The hunger bar is right-aligned, so the half icon keeps its right half.
+hudIcon("food_half", FOOD, FOOD_PALETTE, 0, 3)
+hudIcon("food_empty", FOOD, FOOD_PALETTE, 0)
+
+-- Crosshair attack-cooldown bar: a tiny sword lying flat, hilt on the left.
+local ATTACK_INDICATOR = {
+	"...o.ooooooooo..",
+	"oooobbbbbbbbbbo.",
+	"oooobbbbbbbbbbbo",
+	"...o.oooooooooo.",
+}
+sprite("attack_indicator_bg", ATTACK_INDICATOR, { o = rgb(46, 46, 46), b = rgb(90, 90, 90) })
+sprite("attack_indicator_fill", ATTACK_INDICATOR, { o = rgb(196, 196, 196), b = rgb(255, 255, 255) })
+
+sprite("particle_crit", {
+	"...t....",
+	"...t....",
+	"..twt...",
+	"ttwwwtt.",
+	"..twt...",
+	"...t....",
+	"...t....",
+	"........",
+}, { t = rgb(214, 168, 108), w = rgb(255, 246, 224) })
+
+sprite("particle_magic", {
+	"...c....",
+	".a.c.a..",
+	"..cwc...",
+	"ccwwwcc.",
+	"..cwc...",
+	".a.c.a..",
+	"...c....",
+	"........",
+}, { a = rgb(36, 168, 184), c = rgb(96, 232, 236), w = rgb(255, 255, 255) })
+
+-- Sweep-attack slash: the area between two arcs that meet at both tips.
+sprites.particle_sweep = function()
+	local image = newImage(32, 16)
+	for x = 0, 31 do
+		local t = (x - 15.5) / 16
+		local outer, inner = 2 + 11 * t * t, 7.5 + 5.5 * t * t
+		for y = 0, 15 do
+			local centre = y + 0.5
+			if centre >= outer and centre < math.max(inner, outer + 1) then
+				-- Shaded along the inner (trailing) edge.
+				put(image, x, y, if centre >= inner - 0.7 then rgb(190, 190, 190) else rgb(255, 255, 255), 255)
+			end
+		end
+	end
+	return image
+end
+
+sprite("gui_arrow", {
+	".........a......",
+	".........aa.....",
+	".........aaa....",
+	".........aaaa...",
+	"aaaaaaaaaaaaaa..",
+	"aaaaaaaaaaaaaaa.",
+	"aaaaaaaaaaaaaaaa",
+	"aaaaaaaaaaaaaaa.",
+	"aaaaaaaaaaaaaa..",
+	".........aaaa...",
+	".........aaa....",
+	".........aa.....",
+	".........a......",
+}, { a = rgb(139, 139, 139) })
 
 sprite("bot_face", {
 	"hhhhhhhh",
@@ -841,6 +1049,7 @@ PixelArt.BLOCK_KEYS = {
 	"birch_log_top", "oak_leaves", "birch_leaves", "oak_planks", "stone_bricks",
 	"smooth_stone", "coal_ore", "iron_ore", "diamond_ore", "glowstone", "obsidian",
 	"snow", "snowy_grass_side", "gravel", "deepslate_bricks", "red_concrete", "white_concrete",
+	"birch_planks",
 }
 
 PixelArt.SPRITE_KEYS = {
@@ -852,6 +1061,12 @@ PixelArt.SPRITE_KEYS = {
 	"armor_full", "armor_half", "armor_empty",
 	"slot_head", "slot_chest", "slot_legs", "slot_feet",
 	"bot_face",
+	"cooked_beef", "golden_apple",
+	"food_full", "food_half", "food_empty",
+	"heart_absorb_full", "heart_absorb_half", "heart_blink",
+	"attack_indicator_bg", "attack_indicator_fill",
+	"particle_crit", "particle_magic", "particle_sweep",
+	"gui_arrow", "slot_offhand",
 }
 
 local imageCache: { [string]: Image } = {}

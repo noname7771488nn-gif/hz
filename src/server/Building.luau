@@ -22,6 +22,7 @@ local Building = {}
 local B = Config.BLOCK_SIZE
 local MAX_REACH = Config.BLOCK_REACH * B + 6 -- studs from the root, with slack for latency
 local PROTECTED_MESSAGE = "Hey! Sorry, but you can't change blocks here."
+local ORE_XP = { coal_ore = { 0, 2 }, diamond_ore = { 3, 7 } } -- experience range for mining an ore
 
 local breaking: { [Player]: { x: number, y: number, z: number, started: number } } = {}
 
@@ -95,6 +96,10 @@ local function onFinishBreak(player: Player, x: any, y: any, z: any)
 	local drop = Blocks.dropOf(def)
 	if drop and Items.get(drop) then
 		Drops.spawn({ id = drop, count = 1 }, position, Vector3.new((math.random() - 0.5) * 4, 8, (math.random() - 0.5) * 4), 0.4)
+	end
+	local xp = ORE_XP[def.key]
+	if xp then
+		Combat.addXp(player, math.random(xp[1], xp[2]))
 	end
 end
 

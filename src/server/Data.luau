@@ -11,6 +11,7 @@ export type Profile = {
 	inventory: any,
 	kills: number,
 	deaths: number,
+	xp: number,
 }
 
 local store: DataStore? = nil
@@ -32,7 +33,7 @@ local function keyFor(player: Player): string
 end
 
 function Data.load(player: Player): Profile
-	local profile: Profile = { loaded = false, kits = {}, inventory = nil, kills = 0, deaths = 0 }
+	local profile: Profile = { loaded = false, kits = {}, inventory = nil, kills = 0, deaths = 0, xp = 0 }
 	if store then
 		for attempt = 1, 3 do
 			local ok, result = pcall(function()
@@ -51,6 +52,7 @@ function Data.load(player: Player): Profile
 					profile.inventory = result.inventory
 					profile.kills = if type(result.kills) == "number" then result.kills else 0
 					profile.deaths = if type(result.deaths) == "number" then result.deaths else 0
+					profile.xp = if type(result.xp) == "number" then math.max(0, result.xp) else 0
 				end
 				break
 			end
@@ -73,6 +75,7 @@ function Data.save(player: Player, inventory: any)
 		inventory = inventory,
 		kills = player:GetAttribute("Kills") or profile.kills,
 		deaths = player:GetAttribute("Deaths") or profile.deaths,
+		xp = player:GetAttribute("Xp") or profile.xp,
 	}
 	for attempt = 1, 3 do
 		local ok, err = pcall(function()
