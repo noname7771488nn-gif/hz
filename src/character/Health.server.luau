@@ -1,0 +1,2 @@
+-- Intentionally empty: replaces Roblox's default "Health" regen script.
+-- Natural regeneration is handled by the server Combat module (half a heart every few seconds).
